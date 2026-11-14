@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 from telegram import Update
-from telegram.constants import ChatType
+from telegram.constants import ChatAction, ChatType
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -223,7 +223,9 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     last_reply = context.application.bot_data.setdefault("last_reply_at", {}).get(chat.id)
     now = utc_now()
-    if last_reply and (now - last_reply).total_seconds() < REPLY_COOLDOWN_SECONDS:
+    # Direct mentions and replies should never be dropped by the group-wide
+    # cooldown; throttle only unsolicited replies to game-related messages.
+    if not direct and last_reply and (now - last_reply).total_seconds() < REPLY_COOLDOWN_SECONDS:
         return
 
     model = context.application.bot_data.get("model")
@@ -248,6 +250,8 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 user_prompt = f"پیام قبلی تو که کاربر به آن پاسخ داده: {previous_bot_text}\n\nپیام گروه: {text}"
 
     try:
+        if direct:
+            await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
         answer = await free_model_chat(
             model,
             [
