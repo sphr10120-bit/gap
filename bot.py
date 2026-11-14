@@ -22,6 +22,10 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+# Telegram's Bot API puts the bot token in the request URL. Do not let httpx
+# log request URLs at INFO level, where credentials would appear in Railway logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("console_idle_bot")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -331,11 +335,31 @@ async def post_init(application: Application) -> None:
             "Could not load a FreeModel model. Check FREEMODEL_API_KEY or set FREEMODEL_MODEL to an available model ID."
         ) from exc
     log.info("Bot @%s started; using FreeModel model %s", me.username, application.bot_data["model"])
-    application.create_task(start_idle_monitor(application), name="idle-discussion-monitor")
+    # post_init runs before Application.start(), so own this task explicitly
+    # instead of Application.create_task(), which warns before the app is running.
+    application.bot_data["idle_monitor_task"] = asyncio.create_task(
+        start_idle_monitor(application), name="idle-discussion-monitor"
+    )
+
+
+async def post_stop(application: Application) -> None:
+    monitor_task = application.bot_data.pop("idle_monitor_task", None)
+    if monitor_task and not monitor_task.done():
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
 
 
 def main() -> None:
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
+    application = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .post_init(post_init)
+        .post_stop(post_stop)
+        .build()
+    )
     application.add_handler(CommandHandler("start", start_command), group=0)
     application.add_handler(CommandHandler("id", id_command), group=0)
     application.add_handler(CommandHandler("status", status_command), group=0)
