@@ -820,6 +820,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     bot_id = context.application.bot_data.get("bot_id")
+    bot_username = context.application.bot_data.get("bot_username") or ""
     if message.from_user and bot_id and message.from_user.id == bot_id:
         return
 
