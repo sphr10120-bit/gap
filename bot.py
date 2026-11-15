@@ -6,7 +6,9 @@ import html
 import logging
 import os
 import re
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 import xml.etree.ElementTree as ET
 
@@ -44,6 +46,7 @@ REPLY_COOLDOWN_SECONDS = int(os.getenv("REPLY_COOLDOWN_SECONDS", "60"))
 CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "20"))
 NEWS_SEARCH_ENABLED = os.getenv("NEWS_SEARCH_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
 NEWS_SEARCH_MAX_RESULTS = max(1, min(int(os.getenv("NEWS_SEARCH_MAX_RESULTS", "4")), 8))
+NEWS_CACHE_TTL_SECONDS = max(0, int(os.getenv("NEWS_CACHE_TTL_SECONDS", "300")))
 
 try:
     TARGET_CHAT_ID = int(TARGET_CHAT_ID_RAW) if TARGET_CHAT_ID_RAW else None
@@ -76,6 +79,30 @@ NEWS_TRIGGER_TERMS = (
     "patch", "release date", "release", "launch", "announced", "price", "new trailer",
     "new season", "showcase", "event",
 )
+
+NEWS_QUERY_FILLERS = (
+    "میشه بگی", "میتونی بگی", "می‌تونی بگی", "لطفا بگو", "لطفاً بگو", "اخبار جدید",
+    "خبرهای جدید", "آخرین اخبار", "جدیدترین اخبار", "چه خبر", "چی شده", "دربارهٔ", "درباره",
+    "راجع به", "در مورد", "لطفا", "لطفاً", "آخرین", "جدیدترین", "اخبار", "خبرها", "خبر",
+    "میشه", "می‌شود", "میتونی", "می‌تونی", "الان", "بگو", "لطفا", "لطفاً",
+    "latest news", "latest", "recent news", "news", "tell me about", "what is happening with",
+    "what happened to", "any updates on", "update on", "updates on", "please", "what about",
+)
+NEWS_QUERY_STOPWORDS = {
+    "the", "and", "for", "with", "from", "about", "what", "when", "where", "which", "who",
+    "is", "are", "was", "were", "has", "have", "does", "did", "can", "could", "would",
+    "latest", "recent", "news", "update", "updates", "game", "games", "gaming", "video",
+    "console", "consoles", "release", "releases", "patch", "update", "updates", "announced", "price",
+    "بازی", "بازیها", "بازی‌های", "گیم", "گیمینگ", "کنسول", "کنسولی", "آپدیت", "آپدیتها", "آپدیت‌های",
+    "خبر", "اخبار", "جدید", "جدیدترین", "آخرین", "درباره", "راجع", "راجب", "مورد", "چی", "چیه", "چیست",
+    "چه", "برای", "از", "به", "در", "را", "این", "اون", "من", "میخوام", "میخای",
+}
+NEWS_GENERIC_QUERY_TERMS = {
+    "game", "games", "gaming", "video", "console", "consoles", "playstation", "xbox",
+    "nintendo", "switch", "ps4", "ps5", "خبر", "اخبار", "بازی", "گیم", "کنسول", "نینتندو",
+    "پلی", "استیشن", "ایکس", "باکس",
+}
+_news_search_cache: dict[str, tuple[float, str]] = {}
 
 
 def utc_now() -> datetime:
@@ -176,67 +203,171 @@ async def coarena_chat(
     return str(content).strip()
 
 
+def clean_news_query(query: str) -> str:
+    text = re.sub(r"https?://\S+|@\w+", " ", query, flags=re.IGNORECASE)
+    text = re.sub(r"\bgta\s*6\b|\bgta\s*vi\b|\bgta6\b", "GTA 6", text, flags=re.IGNORECASE)
+    for filler in sorted(set(NEWS_QUERY_FILLERS), key=len, reverse=True):
+        text = re.sub(re.escape(filler), " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"[؟?!،,؛:;\"'`]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:180]
+
+
+def news_query_terms(query: str) -> list[str]:
+    return [
+        term for term in re.findall(r"[a-z0-9]+|[\u0600-\u06FF]+", query.casefold())
+        if term not in NEWS_QUERY_STOPWORDS and (len(term) > 1 or term.isdigit())
+    ]
+
+
+async def fetch_news_rss(client: httpx.AsyncClient, search_query: str, locale: dict[str, str]) -> list[dict[str, Any]]:
+    try:
+        response = await client.get(
+            "https://news.google.com/rss/search",
+            params={"q": search_query, **locale},
+        )
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
+    except (httpx.HTTPError, ET.ParseError) as exc:
+        log.debug("Gaming-news RSS request failed (%s): %s", locale["hl"], exc.__class__.__name__)
+        return []
+
+    fresh_after = utc_now() - timedelta(days=30)
+    parsed: list[dict[str, Any]] = []
+    for item in root.findall("./channel/item"):
+        title = html.unescape((item.findtext("title") or "").strip())
+        link = (item.findtext("link") or "").strip()
+        published = (item.findtext("pubDate") or "").strip()
+        if not title or not link or not published:
+            continue
+        try:
+            published_at = parsedate_to_datetime(published)
+            if published_at.tzinfo is None:
+                published_at = published_at.replace(tzinfo=timezone.utc)
+            published_at = published_at.astimezone(timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if published_at < fresh_after or published_at > utc_now() + timedelta(hours=12):
+            continue
+
+        source_node = item.find("source")
+        source = (source_node.text or "").strip() if source_node is not None else "Google News"
+        raw_summary = item.findtext("description") or ""
+        summary = html.unescape(re.sub(r"<[^>]+>", " ", raw_summary))
+        summary = re.sub(r"\s+", " ", summary).strip()
+        parsed.append({
+            "title": title,
+            "link": link,
+            "published": published,
+            "published_at": published_at,
+            "source": source or "Google News",
+            "summary": summary,
+        })
+    return parsed
+
+
 async def search_latest_gaming_news(query: str) -> str:
-    """Search current gaming news through Google News RSS without an extra API key."""
+    """Search recent gaming news in parallel, rank relevant stories and cache briefly."""
     if not NEWS_SEARCH_ENABLED:
         return ""
 
-    cleaned_query = re.sub(r"https?://\S+|@\w+", " ", query, flags=re.IGNORECASE)
-    cleaned_query = re.sub(r"\s+", " ", cleaned_query).strip()[:240]
-    if not cleaned_query:
-        cleaned_query = "latest console gaming news"
-    search_queries = [
-        f"{cleaned_query} when:30d",
-        f"{cleaned_query} PlayStation OR Xbox OR Nintendo console game news when:30d",
-        "PlayStation OR Xbox OR Nintendo console video game news when:30d",
-    ]
+    cleaned_query = clean_news_query(query)
+    terms = news_query_terms(cleaned_query)
+    cache_key = " ".join(terms) or "__console_gaming_news__"
+    now_mono = time.monotonic()
+    cached = _news_search_cache.get(cache_key)
+    if cached and cached[0] > now_mono:
+        log.info("Gaming-news search cache hit")
+        return cached[1]
+    _news_search_cache.pop(cache_key, None)
+
+    generic_query = not terms or set(terms).issubset(NEWS_GENERIC_QUERY_TERMS)
+    if generic_query:
+        search_stages = [
+            "PlayStation OR Xbox OR Nintendo console gaming news when:7d",
+            "PlayStation OR Xbox OR Nintendo console game releases updates when:30d",
+        ]
+    else:
+        search_stages = [
+            f"{cleaned_query} when:14d",
+            f"{cleaned_query} video game news when:30d",
+        ]
+    locales = (
+        {"hl": "en-US", "gl": "US", "ceid": "US:en"},
+        {"hl": "fa-IR", "gl": "IR", "ceid": "IR:fa"},
+    )
     headers = {"User-Agent": "ConsoleIdleBot/1.0 (gaming news RSS reader)"}
+    candidate_map: dict[str, dict[str, Any]] = {}
+    winning_query = ""
 
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(5.0, connect=1.5),
+            timeout=httpx.Timeout(3.5, connect=1.2),
             follow_redirects=True,
             headers=headers,
         ) as client:
-            for attempt, search_query in enumerate(search_queries, start=1):
-                try:
-                    response = await client.get(
-                        "https://news.google.com/rss/search",
-                        params={"q": search_query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
+            for stage_index, search_query in enumerate(search_stages, start=1):
+                locale_results = await asyncio.gather(*(
+                    fetch_news_rss(client, search_query, locale) for locale in locales
+                ))
+                stage_candidates = [item for results in locale_results for item in results]
+                for item in stage_candidates:
+                    title_key = re.sub(r"[^\w\u0600-\u06FF]+", " ", item["title"].casefold()).strip()
+                    existing = candidate_map.get(title_key)
+                    if existing is None or item["published_at"] > existing["published_at"]:
+                        candidate_map[title_key] = item
+
+                if generic_query:
+                    relevant = list(candidate_map.values())
+                else:
+                    relevant = [
+                        item for item in candidate_map.values()
+                        if any(term in (item["title"] + " " + item["summary"]).casefold() for term in terms)
+                    ]
+                if relevant:
+                    winning_query = search_query
+                    log.info(
+                        "Gaming-news search found %d relevant items on stage %d",
+                        len(relevant), stage_index,
                     )
-                    response.raise_for_status()
-                    root = ET.fromstring(response.content)
-                except httpx.HTTPError as exc:
-                    log.warning("Live gaming-news search attempt %d failed: %s", attempt, exc.__class__.__name__)
-                    return ""
-                except ET.ParseError:
-                    log.warning("Live gaming-news search attempt %d returned invalid RSS", attempt)
-                    continue
+                    break
 
-                items = root.findall("./channel/item")[:NEWS_SEARCH_MAX_RESULTS]
-                results: list[str] = []
-                for item in items:
-                    title = (item.findtext("title") or "").strip()
-                    link = (item.findtext("link") or "").strip()
-                    published = (item.findtext("pubDate") or "").strip()
-                    source_node = item.find("source")
-                    source = (source_node.text or "").strip() if source_node is not None else "Google News"
-                    raw_summary = item.findtext("description") or ""
-                    summary = html.unescape(re.sub(r"<[^>]+>", " ", raw_summary))
-                    summary = re.sub(r"\s+", " ", summary).strip()
-                    if not title or not link:
-                        continue
-                    block = f"{len(results) + 1}. {title}\nمنبع: {source}\nتاریخ انتشار: {published}\nلینک: {link}"
-                    if summary:
-                        block += f"\nخلاصهٔ نتیجه: {summary[:360]}"
-                    results.append(block)
-                if results:
-                    log.info("Live gaming-news search returned %d results on attempt %d", len(results), attempt)
-                    return f"عبارت جست‌وجو: {search_query}\n\n" + "\n\n".join(results)
-                log.info("Live gaming-news search returned no items on attempt %d", attempt)
+        if not candidate_map or not winning_query:
+            log.info("Gaming-news search returned no relevant results")
+            if NEWS_CACHE_TTL_SECONDS:
+                _news_search_cache[cache_key] = (time.monotonic() + min(NEWS_CACHE_TTL_SECONDS, 60), "")
+            return ""
 
-        log.warning("No live gaming-news results after %d search attempts", len(search_queries))
-        return ""
+        selected = list(candidate_map.values())
+        if not generic_query:
+            selected = [
+                item for item in selected
+                if any(term in (item["title"] + " " + item["summary"]).casefold() for term in terms)
+            ]
+        selected.sort(
+            key=lambda item: (
+                sum(term in item["title"].casefold() for term in terms) if not generic_query else 0,
+                item["published_at"],
+            ),
+            reverse=True,
+        )
+        lines = [f"عبارت جست‌وجو: {winning_query}"]
+        for index, item in enumerate(selected[:NEWS_SEARCH_MAX_RESULTS], start=1):
+            block = (
+                f"{index}. {item['title']}\nمنبع: {item['source']}\n"
+                f"تاریخ انتشار: {item['published']}\nلینک: {item['link']}"
+            )
+            if item["summary"]:
+                block += f"\nخلاصه: {item['summary'][:220]}"
+            lines.append(block)
+        result_text = "\n\n".join(lines)
+
+        if NEWS_CACHE_TTL_SECONDS:
+            if len(_news_search_cache) >= 128:
+                oldest = min(_news_search_cache, key=lambda key: _news_search_cache[key][0])
+                _news_search_cache.pop(oldest, None)
+            _news_search_cache[cache_key] = (time.monotonic() + NEWS_CACHE_TTL_SECONDS, result_text)
+        return result_text
     except httpx.HTTPError as exc:
         log.warning("Could not connect to live gaming-news search: %s", exc.__class__.__name__)
         return ""
