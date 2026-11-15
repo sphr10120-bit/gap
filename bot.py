@@ -38,6 +38,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 COARENA_API_KEY = os.getenv("COARENA_API_KEY", "").strip()
 COARENA_BASE_URL = os.getenv("COARENA_BASE_URL", "https://coarena.ai/api/v1").rstrip("/")
 COARENA_MODEL = os.getenv("COARENA_MODEL", "deepseek-v4-1-flash-1017").strip()
+BOT_TONE = os.getenv("BOT_TONE", "friendly").strip().lower()
 TARGET_CHAT_USERNAME = os.getenv("TARGET_CHAT_USERNAME", "Pixel_Mediair").strip().lstrip("@").lower()
 TARGET_CHAT_ID_RAW = os.getenv("TARGET_CHAT_ID", "").strip()
 IDLE_MINUTES = int(os.getenv("IDLE_MINUTES", "15"))
@@ -57,6 +58,8 @@ if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("Missing required environment variable: TELEGRAM_BOT_TOKEN")
 if not COARENA_API_KEY:
     raise RuntimeError("Missing required environment variable: COARENA_API_KEY")
+if BOT_TONE not in {"friendly", "serious"}:
+    raise RuntimeError("BOT_TONE must be either 'friendly' or 'serious'.")
 if not TARGET_CHAT_USERNAME and TARGET_CHAT_ID is None:
     raise RuntimeError("Set TARGET_CHAT_USERNAME or TARGET_CHAT_ID to restrict the bot to one group.")
 
@@ -107,6 +110,18 @@ _news_search_cache: dict[str, tuple[float, str]] = {}
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def tone_instruction() -> str:
+    if BOT_TONE == "serious":
+        return (
+            "لحن جدی، دقیق و محترمانه داشته باش؛ از شوخی، اغراق و زبان بیش‌ازحد خودمانی پرهیز کن. "
+            "ایموجی، شکلک متنی و اشاره به استیکر به کار نبر."
+        )
+    return (
+        "لحن دوستانه، گرم و کمی صمیمی داشته باش، اما محترمانه و متعادل بمان؛ از شوخی و خودمانی‌گری افراطی دوری کن. "
+        "ایموجی، شکلک متنی و اشاره به استیکر به کار نبر."
+    )
 
 
 def matches_target_chat(chat: Any) -> bool:
@@ -412,8 +427,10 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not matches_target_chat(update.effective_chat):
         return
     model = context.application.bot_data.get("model", "در حال آماده‌سازی")
+    tone_label = "جدی" if BOT_TONE == "serious" else "صمیمی"
     await update.effective_message.reply_text(
-        f"ربات فعاله. شروع بحث: پس از {IDLE_MINUTES} دقیقه سکوت؛ فاصلهٔ حداقلی بین شروع بحث‌ها: {TOPIC_COOLDOWN_MINUTES} دقیقه. مدل: {model}"
+        f"ربات فعاله. شروع بحث: پس از {IDLE_MINUTES} دقیقه سکوت؛ فاصلهٔ حداقلی بین شروع بحث‌ها: {TOPIC_COOLDOWN_MINUTES} دقیقه. "
+        f"لحن: {tone_label}. مدل: {model}"
     )
 
 
@@ -451,9 +468,8 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     system_prompt = (
-        "تو یک دستیار فارسی‌زبان با لحنی دوستانه، صمیمی و محترمانه در گروهی با محور بازی‌های کنسولی هستی. "
-        "گرم و خوش‌برخورد بنویس، اما جدیت را حفظ کن و از شوخی یا لحن بیش‌ازحد خودمانی و اغراق پرهیز کن. "
-        "ایموجی، شکلک متنی و اشاره به استیکر به کار نبر. "
+        "تو یک دستیار فارسی‌زبان در گروهی با محور بازی‌های کنسولی هستی. "
+        f"{tone_instruction()} "
         "اگر کاربر مستقیماً تو را منشن کرده یا به پیام تو ریپلای کرده، روشن، دقیق و مختصر پاسخ بده؛ "
         "در غیر این صورت فقط اگر پیام واقعاً دربارهٔ بازی‌های کنسولی است، پاسخی مرتبط و سنجیده بده. "
         "برای پیام نامرتبط یا وقتی پاسخ‌دادن لازم نیست، دقیقاً فقط این عبارت را برگردان: NO_REPLY. "
@@ -533,11 +549,11 @@ async def start_idle_monitor(application: Application) -> None:
                 "latest console video game news PlayStation Xbox Nintendo releases updates"
             )
             system_prompt = (
-                "تو آغازگر بحث‌های بازی‌های کنسولی در یک گروه فارسی هستی. یک سؤال کوتاه، جدی و باز برای شروع گفت‌وگو بنویس. "
+                "تو آغازگر بحث‌های بازی‌های کنسولی در یک گروه فارسی هستی. یک سؤال کوتاه و باز برای شروع گفت‌وگو بنویس. "
+                f"{tone_instruction()} "
                 "موضوع می‌تواند بازی‌های جدید یا قدیمی، پلی‌استیشن، ایکس‌باکس، نینتندو، تجربهٔ بازی یا انتخاب‌های گیمرها باشد. "
                 "اگر نتایج خبر روز داده شده، یکی را به‌عنوان سوژهٔ بحث انتخاب کن و نام منبع و لینک را هم اضافه کن. "
                 "اگر خبر تازه‌ای پیدا نشد، سؤال گیمیِ عمومی بساز و ادعای روزبودن نکن. "
-                "لحن را دوستانه، صمیمی و محترمانه نگه دار، اما شوخی نکن؛ از ایموجی، شکلک متنی و اشاره به استیکر استفاده نکن. "
                 "از اسپویل، تبلیغ و موضوعات حساس دوری کن و فقط همان یک سؤال را بفرست. "
                 "اگر فهرست سؤال‌های قبلی داده شده، موضوع تکراری انتخاب نکن."
             )
