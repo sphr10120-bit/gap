@@ -8,7 +8,7 @@ from typing import Any
 
 
 class ConversationMemory:
-    """Bounded, in-process transcript; message text is never written to SQLite."""
+    """Bounded in-process cache; persistent copies are managed separately by StateStore."""
 
     def __init__(self, *, ttl_seconds: int, max_messages: int = 12) -> None:
         self.ttl_seconds = max(60, int(ttl_seconds))
@@ -23,6 +23,7 @@ class ConversationMemory:
         text: str,
         *,
         author: str = "",
+        user_id: int | None = None,
         at: float | None = None,
     ) -> None:
         if role not in {"user", "assistant"}:
@@ -38,10 +39,21 @@ class ConversationMemory:
             "message_id": message_id,
             "role": role,
             "author": (author or "")[:80],
+            "user_id": user_id,
             "text": cleaned,
             "created_at": timestamp,
         })
         self._messages[chat_id] = messages[-self.max_messages:]
+
+    def delete_user(self, chat_id: int, user_id: int) -> None:
+        retained = [
+            item for item in self._messages.get(chat_id, [])
+            if item.get("user_id") != user_id
+        ]
+        if retained:
+            self._messages[chat_id] = retained
+        else:
+            self._messages.pop(chat_id, None)
 
     def recent(
         self,
@@ -76,7 +88,7 @@ class ConversationMemory:
 
 
 class StateStore:
-    """SQLite store for restart-safe timestamps, topics and command cooldowns only."""
+    """SQLite store for restart-safe scheduling and bounded, expiring group/user memory."""
 
     def __init__(self, path: str) -> None:
         self.path = os.path.abspath(os.path.expanduser(path))
@@ -120,6 +132,29 @@ class StateStore:
                     next_due_at REAL NOT NULL,
                     PRIMARY KEY (chat_id, kind)
                 );
+                CREATE TABLE IF NOT EXISTS conversation_messages (
+                    chat_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    user_id INTEGER,
+                    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+                    author TEXT NOT NULL DEFAULT '',
+                    text TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (chat_id, message_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_conversation_chat_time
+                    ON conversation_messages(chat_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_conversation_user
+                    ON conversation_messages(chat_id, user_id);
+                CREATE TABLE IF NOT EXISTS user_profile_memories (
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    preference TEXT NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (chat_id, user_id, preference)
+                );
+                CREATE INDEX IF NOT EXISTS idx_user_profile_time
+                    ON user_profile_memories(chat_id, user_id, updated_at DESC);
                 """
             )
 
@@ -183,6 +218,176 @@ class StateStore:
             (chat_id, max(1, min(limit, 12))),
         ).fetchall()
         return [row["topic"] for row in reversed(rows)]
+
+    def record_conversation_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        role: str,
+        text: str,
+        *,
+        user_id: int | None = None,
+        author: str = "",
+        at: float | None = None,
+        ttl_seconds: int = 30 * 24 * 60 * 60,
+        max_messages: int = 12,
+    ) -> None:
+        if role not in {"user", "assistant"}:
+            raise ValueError("role must be 'user' or 'assistant'")
+        cleaned = (text or "").strip()[:1200]
+        if not cleaned:
+            return
+        timestamp = time.time() if at is None else at
+        cutoff = timestamp - max(60, int(ttl_seconds))
+        keep = max(1, int(max_messages))
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM conversation_messages WHERE chat_id = ? AND created_at < ?",
+                (chat_id, cutoff),
+            )
+            self.connection.execute(
+                """
+                INSERT OR REPLACE INTO conversation_messages
+                    (chat_id, message_id, user_id, role, author, text, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (chat_id, message_id, user_id, role, (author or "")[:80], cleaned, timestamp),
+            )
+            self.connection.execute(
+                """
+                DELETE FROM conversation_messages
+                WHERE chat_id = ? AND message_id NOT IN (
+                    SELECT message_id FROM conversation_messages
+                    WHERE chat_id = ? ORDER BY created_at DESC, message_id DESC LIMIT ?
+                )
+                """,
+                (chat_id, chat_id, keep),
+            )
+
+    def recent_conversation_messages(
+        self,
+        chat_id: int,
+        *,
+        now: float,
+        ttl_seconds: int = 30 * 24 * 60 * 60,
+        exclude_message_id: int | None = None,
+        limit: int = 12,
+    ) -> list[dict[str, Any]]:
+        cutoff = now - max(60, int(ttl_seconds))
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM conversation_messages WHERE chat_id = ? AND created_at < ?",
+                (chat_id, cutoff),
+            )
+        rows = self.connection.execute(
+            """
+            SELECT chat_id, message_id, user_id, role, author, text, created_at
+            FROM conversation_messages
+            WHERE chat_id = ? AND created_at >= ?
+              AND (? IS NULL OR message_id != ?)
+            ORDER BY created_at DESC, message_id DESC LIMIT ?
+            """,
+            (chat_id, cutoff, exclude_message_id, exclude_message_id, max(1, min(limit, 12))),
+        ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
+    def record_user_preference(
+        self,
+        chat_id: int,
+        user_id: int,
+        preference: str,
+        *,
+        at: float | None = None,
+        ttl_seconds: int = 30 * 24 * 60 * 60,
+        max_items: int = 5,
+    ) -> None:
+        cleaned = (preference or "").strip()[:500]
+        if not cleaned:
+            return
+        timestamp = time.time() if at is None else at
+        cutoff = timestamp - max(60, int(ttl_seconds))
+        keep = max(1, int(max_items))
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM user_profile_memories WHERE chat_id = ? AND user_id = ? AND updated_at < ?",
+                (chat_id, user_id, cutoff),
+            )
+            self.connection.execute(
+                """
+                INSERT INTO user_profile_memories(chat_id, user_id, preference, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(chat_id, user_id, preference) DO UPDATE SET updated_at = excluded.updated_at
+                """,
+                (chat_id, user_id, cleaned, timestamp),
+            )
+            self.connection.execute(
+                """
+                DELETE FROM user_profile_memories
+                WHERE chat_id = ? AND user_id = ? AND preference NOT IN (
+                    SELECT preference FROM user_profile_memories
+                    WHERE chat_id = ? AND user_id = ?
+                    ORDER BY updated_at DESC, preference DESC LIMIT ?
+                )
+                """,
+                (chat_id, user_id, chat_id, user_id, keep),
+            )
+
+    def user_preferences(
+        self,
+        chat_id: int,
+        user_id: int,
+        *,
+        now: float,
+        ttl_seconds: int = 30 * 24 * 60 * 60,
+        limit: int = 5,
+    ) -> list[str]:
+        cutoff = now - max(60, int(ttl_seconds))
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM user_profile_memories WHERE chat_id = ? AND user_id = ? AND updated_at < ?",
+                (chat_id, user_id, cutoff),
+            )
+        rows = self.connection.execute(
+            """
+            SELECT preference FROM user_profile_memories
+            WHERE chat_id = ? AND user_id = ? AND updated_at >= ?
+            ORDER BY updated_at ASC, preference ASC LIMIT ?
+            """,
+            (chat_id, user_id, cutoff, max(1, min(limit, 5))),
+        ).fetchall()
+        return [str(row["preference"]) for row in rows]
+
+    def forget_user(self, chat_id: int, user_id: int) -> tuple[int, int]:
+        with self.connection:
+            messages = self.connection.execute(
+                "DELETE FROM conversation_messages WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            ).rowcount
+            preferences = self.connection.execute(
+                "DELETE FROM user_profile_memories WHERE chat_id = ? AND user_id = ?",
+                (chat_id, user_id),
+            ).rowcount
+        return messages, preferences
+
+    def purge_expired_user_data(
+        self,
+        *,
+        now: float,
+        conversation_ttl_seconds: int = 30 * 24 * 60 * 60,
+        preference_ttl_seconds: int = 30 * 24 * 60 * 60,
+    ) -> tuple[int, int]:
+        conversation_cutoff = now - max(60, int(conversation_ttl_seconds))
+        preference_cutoff = now - max(60, int(preference_ttl_seconds))
+        with self.connection:
+            messages = self.connection.execute(
+                "DELETE FROM conversation_messages WHERE created_at < ?",
+                (conversation_cutoff,),
+            ).rowcount
+            preferences = self.connection.execute(
+                "DELETE FROM user_profile_memories WHERE updated_at < ?",
+                (preference_cutoff,),
+            ).rowcount
+        return messages, preferences
 
     def weekly_due(self, chat_id: int, *, now: float, interval_seconds: int) -> bool:
         row = self.connection.execute(
