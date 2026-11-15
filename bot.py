@@ -1026,8 +1026,31 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 log.exception("Could not persist reply timestamp")
     except httpx.HTTPStatusError as exc:
         log.error("CoArena API returned HTTP %s", exc.response.status_code)
+        if direct:
+            if exc.response.status_code == 402:
+                notice = (
+                    "پیامت و پیامِ ریپلای‌شده را دریافت کردم، اما سرویس CoArena درخواست مدل را با خطای 402 رد کرد. "
+                    "فعلاً نمی‌توانم پاسخ هوش‌مصنوعی بسازم؛ اعتبار یا دسترسی مدل API باید بررسی شود."
+                )
+            else:
+                notice = (
+                    f"پیامت را دریافت کردم، اما سرویس هوش‌مصنوعی موقتاً خطای {exc.response.status_code} برگرداند. "
+                    "لطفاً کمی بعد دوباره امتحان کن."
+                )
+            try:
+                await message.reply_text(notice, allow_sending_without_reply=True)
+            except Exception:
+                log.exception("Could not send CoArena error notice to the user")
     except httpx.HTTPError as exc:
         log.error("CoArena request failed: %s", exc.__class__.__name__)
+        if direct:
+            try:
+                await message.reply_text(
+                    "پیامت را دریافت کردم، اما فعلاً به سرویس هوش‌مصنوعی وصل نمی‌شوم. لطفاً کمی بعد دوباره امتحان کن.",
+                    allow_sending_without_reply=True,
+                )
+            except Exception:
+                log.exception("Could not send CoArena connection notice to the user")
     except Exception:
         log.exception("Could not generate or send a reply")
     finally:
