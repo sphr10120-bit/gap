@@ -49,6 +49,7 @@ if not BOT_DB_PATH:
     BOT_DB_PATH = os.path.join(volume_mount_path or "./data", "bot_state.sqlite3")
 TARGET_CHAT_USERNAME = os.getenv("TARGET_CHAT_USERNAME", "Pixel_Mediair").strip().lstrip("@").lower()
 TARGET_CHAT_ID_RAW = os.getenv("TARGET_CHAT_ID", "").strip()
+CREATOR_TELEGRAM_ID_RAW = os.getenv("CREATOR_TELEGRAM_ID", "").strip()
 IDLE_MINUTES = int(os.getenv("IDLE_MINUTES", "15"))
 TOPIC_COOLDOWN_MINUTES = int(os.getenv("TOPIC_COOLDOWN_MINUTES", "60"))
 REPLY_COOLDOWN_SECONDS = int(os.getenv("REPLY_COOLDOWN_SECONDS", "60"))
@@ -60,12 +61,22 @@ CONVERSATION_TTL_MINUTES = max(1, int(os.getenv("CONVERSATION_TTL_MINUTES", "15"
 CONVERSATION_MAX_MESSAGES = max(2, min(int(os.getenv("CONVERSATION_MAX_MESSAGES", "12")), 30))
 WEEKLY_TOPIC_INTERVAL_DAYS = max(1, int(os.getenv("WEEKLY_TOPIC_INTERVAL_DAYS", "7")))
 INTERACTION_COOLDOWN_SECONDS = max(30, int(os.getenv("INTERACTION_COOLDOWN_SECONDS", "120")))
+WEEKLY_INTERACTION_INTERVAL_DAYS = max(1, int(os.getenv("WEEKLY_INTERACTION_INTERVAL_DAYS", "7")))
+WEEKLY_INTERACTION_FIRST_DELAY_HOURS = max(0, int(os.getenv("WEEKLY_INTERACTION_FIRST_DELAY_HOURS", "24")))
+WEEKLY_INTERACTION_SPACING_HOURS = max(1, int(os.getenv("WEEKLY_INTERACTION_SPACING_HOURS", "84")))
 TOPIC_RETRY_COOLDOWN_SECONDS = max(60, int(os.getenv("TOPIC_RETRY_COOLDOWN_SECONDS", "900")))
 
 try:
     TARGET_CHAT_ID = int(TARGET_CHAT_ID_RAW) if TARGET_CHAT_ID_RAW else None
 except ValueError as exc:
     raise RuntimeError("TARGET_CHAT_ID must be a numeric Telegram chat ID.") from exc
+
+try:
+    CREATOR_TELEGRAM_ID = int(CREATOR_TELEGRAM_ID_RAW) if CREATOR_TELEGRAM_ID_RAW else None
+except ValueError as exc:
+    raise RuntimeError("CREATOR_TELEGRAM_ID must be a numeric Telegram user ID.") from exc
+if CREATOR_TELEGRAM_ID is not None and CREATOR_TELEGRAM_ID <= 0:
+    raise RuntimeError("CREATOR_TELEGRAM_ID must be a positive Telegram user ID.")
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("Missing required environment variable: TELEGRAM_BOT_TOKEN")
@@ -605,7 +616,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.effective_chat and update.effective_chat.type == ChatType.PRIVATE:
         await update.effective_message.reply_text(
             "سلام! در گروه تنظیم‌شده به منشن‌ها و ریپلای‌ها جواب می‌دهم و بعد از سکوت بحث گیمی شروع می‌کنم. "
-            "برای تعامل گیمی در گروه از /poll، /quiz یا /weekly استفاده کن."
+            "هر هفته هم یک نظرسنجی و یک quiz می‌گذارم. برای اجرای دستی در گروه از /poll، /quiz یا /weekly استفاده کن."
         )
 
 
@@ -626,7 +637,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     tone_label = "جدی" if BOT_TONE == "serious" else "صمیمی"
     await update.effective_message.reply_text(
         f"ربات فعاله. شروع بحث: پس از {IDLE_MINUTES} دقیقه سکوت؛ فاصلهٔ حداقلی بین شروع بحث‌ها: {TOPIC_COOLDOWN_MINUTES} دقیقه. "
-        f"بحث هفتگی هر {WEEKLY_TOPIC_INTERVAL_DAYS} روز؛ حافظهٔ زمینه: حداکثر {CONVERSATION_MAX_MESSAGES} پیام و {CONVERSATION_TTL_MINUTES} دقیقه. "
+        f"بحث هفتگی هر {WEEKLY_TOPIC_INTERVAL_DAYS} روز؛ نظرسنجی و quiz هر {WEEKLY_INTERACTION_INTERVAL_DAYS} روز و با فاصلهٔ تقریبی {WEEKLY_INTERACTION_SPACING_HOURS} ساعت. "
+        f"حافظهٔ زمینه: حداکثر {CONVERSATION_MAX_MESSAGES} پیام و {CONVERSATION_TTL_MINUTES} دقیقه. "
         f"لحن: {tone_label}. مدل: {model}. دستورها: /poll، /quiz، /weekly"
     )
 
@@ -687,9 +699,16 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         log.error("No CoArena model is configured yet; skipping reply.")
         return
 
+    creator_note = ""
+    if CREATOR_TELEGRAM_ID is not None and message.from_user and message.from_user.id == CREATOR_TELEGRAM_ID:
+        creator_note = (
+            "این پیام از سازندهٔ ربات است؛ محترمانه و با قدردانی متعادل پاسخ بده و در صورت طبیعی‌بودن او را «سازنده» خطاب کن. "
+            "از تملق افراطی یا اطاعت کورکورانه پرهیز کن و شناسهٔ عددی او را افشا نکن. "
+        )
+
     system_prompt = (
         "تو یک دستیار فارسی‌زبان در گروهی با محور بازی‌های کنسولی هستی. "
-        f"{tone_instruction()} "
+        f"{tone_instruction()} {creator_note}"
         "اگر کاربر مستقیماً تو را منشن کرده یا به پیام تو ریپلای کرده، روشن، دقیق و مختصر پاسخ بده؛ "
         "در غیر این صورت فقط اگر پیام واقعاً دربارهٔ بازی‌های کنسولی است، پاسخی مرتبط و سنجیده بده. "
         "برای پیام نامرتبط یا وقتی پاسخ‌دادن لازم نیست، دقیقاً فقط این عبارت را برگردان: NO_REPLY. "
@@ -843,6 +862,33 @@ async def generate_interaction(kind: str) -> dict[str, Any]:
         return fallback
 
 
+async def send_interaction_poll(
+    application: Application,
+    chat_id: int,
+    kind: str,
+    *,
+    message_thread_id: int | None = None,
+) -> None:
+    data = await generate_interaction(kind)
+    poll_kwargs: dict[str, Any] = {
+        "chat_id": chat_id,
+        "question": data["question"],
+        "options": data["options"],
+        "is_anonymous": True,
+        "type": "quiz" if kind == "quiz" else "regular",
+        "open_period": 900,
+    }
+    if message_thread_id:
+        poll_kwargs["message_thread_id"] = message_thread_id
+    if kind == "quiz":
+        poll_kwargs["correct_option_ids"] = [data["correct_option_id"]]
+        if data.get("explanation"):
+            poll_kwargs["explanation"] = data["explanation"]
+    sent = await application.bot.send_poll(**poll_kwargs)
+    record_text = data["question"] + " | " + " / ".join(data["options"])
+    remember_sent_text(application, chat_id, sent, record_text)
+
+
 async def interaction_command(update: Update, context: ContextTypes.DEFAULT_TYPE, kind: str) -> None:
     chat = update.effective_chat
     message = update.effective_message
@@ -869,33 +915,41 @@ async def interaction_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     typing_task = asyncio.create_task(typing_heartbeat(context.bot, chat.id))
     try:
-        data = await generate_interaction(kind)
+        await send_interaction_poll(
+            context.application,
+            chat.id,
+            kind,
+            message_thread_id=message.message_thread_id,
+        )
+    except Exception:
+        log.exception("Could not send %s poll", kind)
+        await message.reply_text("در فرستادن نظرسنجی مشکلی پیش آمد؛ بعداً دوباره امتحان کن.")
     finally:
         typing_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await typing_task
-    poll_type = "quiz" if kind == "quiz" else "regular"
-    poll_kwargs: dict[str, Any] = {
-        "chat_id": chat.id,
-        "question": data["question"],
-        "options": data["options"],
-        "is_anonymous": True,
-        "type": poll_type,
-        "open_period": 900,
-    }
-    if message.message_thread_id:
-        poll_kwargs["message_thread_id"] = message.message_thread_id
-    if kind == "quiz":
-        poll_kwargs["correct_option_ids"] = [data["correct_option_id"]]
-        if data.get("explanation"):
-            poll_kwargs["explanation"] = data["explanation"]
+
+
+async def send_scheduled_interaction(application: Application, chat_id: int, kind: str) -> bool:
+    store: StateStore | None = application.bot_data.get("state_store")
+    if not store:
+        return False
     try:
-        sent = await context.bot.send_poll(**poll_kwargs)
-        record_text = data["question"] + " | " + " / ".join(data["options"])
-        remember_sent_text(context.application, chat.id, sent, record_text)
+        allowed, wait_seconds = store.claim_command(
+            chat_id,
+            kind,
+            now=utc_now().timestamp(),
+            cooldown_seconds=INTERACTION_COOLDOWN_SECONDS,
+        )
+        if not allowed:
+            log.info("Skipping scheduled %s because its command cooldown has %d seconds left", kind, wait_seconds)
+            return False
+        await send_interaction_poll(application, chat_id, kind)
+        log.info("Sent scheduled weekly %s to chat %s", kind, chat_id)
+        return True
     except Exception:
-        log.exception("Could not send %s poll", kind)
-        await message.reply_text("در فرستادن نظرسنجی مشکلی پیش آمد؛ بعداً دوباره امتحان کن.")
+        log.exception("Could not send scheduled weekly %s to chat %s", kind, chat_id)
+        return False
 
 
 async def poll_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1009,6 +1063,46 @@ async def start_idle_monitor(application: Application) -> None:
         if not store:
             continue
         for chat_id, activity_at in list(last_activity.items()):
+            now_ts = now.timestamp()
+            interaction_interval = WEEKLY_INTERACTION_INTERVAL_DAYS * 24 * 60 * 60
+            interaction_spacing = min(
+                WEEKLY_INTERACTION_SPACING_HOURS * 60 * 60,
+                interaction_interval // 2,
+            )
+            try:
+                store.ensure_weekly_interaction_schedule(
+                    chat_id,
+                    now=now_ts,
+                    first_poll_delay_seconds=WEEKLY_INTERACTION_FIRST_DELAY_HOURS * 60 * 60,
+                    spacing_seconds=interaction_spacing,
+                )
+                due_interactions = store.due_weekly_interactions(chat_id, now=now_ts)
+            except Exception:
+                log.exception("Could not read weekly poll/quiz schedule for chat %s", chat_id)
+                continue
+
+            if due_interactions:
+                kind = due_interactions[0][0]
+                sent = await send_scheduled_interaction(application, chat_id, kind)
+                scheduled_at = utc_now().timestamp()
+                next_due = (
+                    scheduled_at + interaction_interval
+                    if sent else scheduled_at + TOPIC_RETRY_COOLDOWN_SECONDS
+                )
+                try:
+                    store.set_weekly_interaction_due(chat_id, kind, next_due_at=next_due)
+                    # If Railway was offline long enough for both to become due,
+                    # never send two interactions back-to-back after recovery.
+                    for pending_kind, _ in due_interactions[1:]:
+                        store.set_weekly_interaction_due(
+                            chat_id,
+                            pending_kind,
+                            next_due_at=scheduled_at + interaction_spacing,
+                        )
+                except Exception:
+                    log.exception("Could not advance weekly poll/quiz schedule for chat %s", chat_id)
+                continue
+
             retry_until = application.bot_data.setdefault("topic_retry_until", {}).get(chat_id)
             if retry_until and now < retry_until:
                 continue

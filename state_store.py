@@ -114,6 +114,12 @@ class StateStore:
                     last_used REAL NOT NULL,
                     PRIMARY KEY (chat_id, command)
                 );
+                CREATE TABLE IF NOT EXISTS weekly_interaction_schedule (
+                    chat_id INTEGER NOT NULL,
+                    kind TEXT NOT NULL CHECK(kind IN ('poll', 'quiz')),
+                    next_due_at REAL NOT NULL,
+                    PRIMARY KEY (chat_id, kind)
+                );
                 """
             )
 
@@ -187,6 +193,52 @@ class StateStore:
             self.record_activity(chat_id, at=now)
             return False
         return now - float(row["weekly_anchor"]) >= interval_seconds
+
+    def ensure_weekly_interaction_schedule(
+        self,
+        chat_id: int,
+        *,
+        now: float,
+        first_poll_delay_seconds: int,
+        spacing_seconds: int,
+    ) -> None:
+        poll_due = now + max(0, first_poll_delay_seconds)
+        quiz_due = poll_due + max(0, spacing_seconds)
+        with self.connection:
+            self.connection.executemany(
+                "INSERT OR IGNORE INTO weekly_interaction_schedule(chat_id, kind, next_due_at) VALUES (?, ?, ?)",
+                ((chat_id, "poll", poll_due), (chat_id, "quiz", quiz_due)),
+            )
+
+    def due_weekly_interactions(self, chat_id: int, *, now: float) -> list[tuple[str, float]]:
+        rows = self.connection.execute(
+            """
+            SELECT kind, next_due_at FROM weekly_interaction_schedule
+            WHERE chat_id = ? AND next_due_at <= ?
+            ORDER BY next_due_at ASC, kind ASC
+            """,
+            (chat_id, now),
+        ).fetchall()
+        return [(str(row["kind"]), float(row["next_due_at"])) for row in rows]
+
+    def set_weekly_interaction_due(
+        self,
+        chat_id: int,
+        kind: str,
+        *,
+        next_due_at: float,
+    ) -> None:
+        if kind not in {"poll", "quiz"}:
+            raise ValueError("kind must be 'poll' or 'quiz'")
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO weekly_interaction_schedule(chat_id, kind, next_due_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(chat_id, kind) DO UPDATE SET next_due_at = excluded.next_due_at
+                """,
+                (chat_id, kind, next_due_at),
+            )
 
     def load_chat_states(self) -> dict[int, dict[str, float | None]]:
         rows = self.connection.execute(
