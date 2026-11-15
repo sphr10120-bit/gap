@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 import xml.etree.ElementTree as ET
 
 import httpx
-from telegram import BotCommand, Update
+from telegram import BotCommand, MessageEntity, Update
 from telegram.constants import ChatAction, ChatType
 from telegram.ext import (
     Application,
@@ -521,11 +521,84 @@ async def typing_heartbeat(bot: Any, chat_id: int) -> None:
         await asyncio.sleep(4)
 
 
-def trim_for_telegram(text: str, limit: int = 3500) -> str:
-    clean = text.strip()
-    if len(clean) <= limit:
-        return clean
-    return clean[: limit - 1].rsplit(" ", 1)[0] + "…"
+TELEGRAM_LINK_PATTERN = re.compile(
+    r"\[(?P<label>[^\]\n]{1,160})\]\((?P<markdown_url>https?://[^)\s]+)\)"
+    r"|(?P<raw_url>https?://[^\s<>]+)",
+    re.IGNORECASE,
+)
+TRAILING_URL_PUNCTUATION = ".,!?؟،؛:)]}\"'»"
+
+
+def format_telegram_message(text: str, limit: int = 3500) -> tuple[str, list[MessageEntity]]:
+    """Turn raw/Markdown URLs into compact Telegram text links without exposing long RSS URLs."""
+    clean = (text or "").strip()
+    clean = re.sub(r"(?m)^\s*#{1,6}\s*", "", clean)
+    clean = re.sub(r"\*\*(.+?)\*\*|__(.+?)__", lambda m: m.group(1) or m.group(2), clean)
+    clean = re.sub(r"(?<!\w)\*(.+?)\*(?!\w)", r"\1", clean)
+    clean = clean.replace("`", "")
+    clean = re.sub(r"\[([^\]\n]+)\](?!\()", r"\1", clean)
+    clean = re.sub(
+        r"(?im)^((?:منبع|source)\s*:\s*)([^\n]+)\n(https?://[^\s<>]+)$",
+        r"\1[\2](\3)",
+        clean,
+    )
+    clean = re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", clean).strip()
+
+    parts: list[str] = []
+    links: list[tuple[int, int, str]] = []
+    cursor = 0
+    output_length = 0
+    link_number = 0
+    for match in TELEGRAM_LINK_PATTERN.finditer(clean):
+        prefix = clean[cursor:match.start()]
+        parts.append(prefix)
+        output_length += len(prefix)
+
+        markdown_label = match.group("label")
+        url = match.group("markdown_url") or match.group("raw_url") or ""
+        url = url.rstrip(TRAILING_URL_PUNCTUATION)
+        suffix = (match.group("markdown_url") or match.group("raw_url") or "")[len(url):]
+        if markdown_label is not None:
+            label = markdown_label.strip().strip("*_`") or "مشاهدهٔ خبر"
+        else:
+            link_number += 1
+            label = "مشاهدهٔ خبر" if link_number == 1 else f"مشاهدهٔ خبر {link_number}"
+
+        label_start = output_length
+        parts.append(label)
+        output_length += len(label)
+        if url:
+            links.append((label_start, len(label), url))
+        if suffix:
+            parts.append(suffix)
+            output_length += len(suffix)
+        cursor = match.end()
+
+    parts.append(clean[cursor:])
+    visible = "".join(parts)
+
+    # Keep links intact if the message needs truncation; Telegram entity offsets
+    # are UTF-16 code units rather than Python character indices.
+    cutoff = len(visible)
+    if cutoff > limit:
+        cutoff = limit - 1
+        word_boundary = visible.rfind(" ", 0, cutoff)
+        if word_boundary >= limit - 120:
+            cutoff = word_boundary
+        for start, length, _ in reversed(links):
+            if start < cutoff < start + length:
+                cutoff = start
+                break
+        visible = visible[:cutoff].rstrip() + "…"
+
+    entities: list[MessageEntity] = []
+    for start, length, url in links:
+        if start + length > cutoff:
+            continue
+        offset_utf16 = len(visible[:start].encode("utf-16-le")) // 2
+        length_utf16 = len(visible[start:start + length].encode("utf-16-le")) // 2
+        entities.append(MessageEntity(MessageEntity.TEXT_LINK, offset_utf16, length_utf16, url=url))
+    return visible, entities
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -621,6 +694,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         "در غیر این صورت فقط اگر پیام واقعاً دربارهٔ بازی‌های کنسولی است، پاسخی مرتبط و سنجیده بده. "
         "برای پیام نامرتبط یا وقتی پاسخ‌دادن لازم نیست، دقیقاً فقط این عبارت را برگردان: NO_REPLY. "
         "اگر نتایج جست‌وجوی زنده داده شده، برای خبر روز فقط به همان نتایج تکیه کن و نام منبع، تاریخ و لینک را در پاسخ بیاور. "
+        "URL را خام در خط جداگانه بنویس و برای لینک از قالب Markdown یا HTML استفاده نکن؛ ربات لینک را کوتاه و قابل‌کلیک نمایش می‌دهد. "
         "اگر نتیجه‌ها به بازی یا پلتفرم مشخص‌شده ربط مستقیم ندارند، آن‌ها را به آن موضوع نسبت نده و بگو منبع مرتبط پیدا نشد. "
         "اگر جست‌وجوی زنده نتیجه نداده، صریح بگو نتوانستی خبر تازه‌ای را تأیید کنی و از ساختن خبر یا تاریخ خودداری کن. "
         "پاسخ را معمولاً در ۱ تا ۳ جملهٔ فارسی بنویس و از چند علامت تعجب یا کشیدن حروف استفاده نکن. "
@@ -661,12 +735,21 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         if not answer or answer.strip().upper() == "NO_REPLY":
             return
-        answer = trim_for_telegram(answer)
+        raw_answer = answer
+        answer, answer_entities = format_telegram_message(raw_answer)
         if direct:
-            sent_message = await message.reply_text(answer, allow_sending_without_reply=True)
+            sent_message = await message.reply_text(
+                answer,
+                entities=answer_entities,
+                allow_sending_without_reply=True,
+            )
         else:
-            sent_message = await context.bot.send_message(chat_id=chat.id, text=answer)
-        remember_sent_text(context.application, chat.id, sent_message, answer)
+            sent_message = await context.bot.send_message(
+                chat_id=chat.id,
+                text=answer,
+                entities=answer_entities,
+            )
+        remember_sent_text(context.application, chat.id, sent_message, raw_answer)
         replied_at = utc_now()
         context.application.bot_data["last_reply_at"][chat.id] = replied_at
         if store:
@@ -841,6 +924,7 @@ async def generate_discussion_topic(application: Application, chat_id: int, *, w
         f"{occasion}{tone_instruction()} "
         "موضوع می‌تواند بازی‌های جدید یا قدیمی، پلی‌استیشن، ایکس‌باکس، نینتندو، تجربهٔ بازی یا انتخاب‌های گیمرها باشد. "
         "اگر نتایج خبر روز داده شده، یکی را به‌عنوان سوژهٔ بحث انتخاب کن و نام منبع و لینک را هم اضافه کن. "
+        "URL را خام در خط جداگانه بنویس و قالب Markdown یا HTML برای لینک به کار نبر. "
         "اگر خبر تازه‌ای پیدا نشد، سؤال گیمیِ عمومی بساز و ادعای روزبودن نکن. "
         "از اسپویل، تبلیغ و موضوعات حساس دوری کن و فقط همان یک سؤال را بفرست. "
         "اگر فهرست سؤال‌های قبلی داده شده، موضوع تکراری انتخاب نکن."
@@ -859,20 +943,25 @@ async def generate_discussion_topic(application: Application, chat_id: int, *, w
             max_tokens=500,
             temperature=0.65,
         )
-        topic = trim_for_telegram(topic)
+        raw_topic = topic.strip()
+        topic, topic_entities = format_telegram_message(raw_topic)
         if not topic:
             return False
-        sent = await application.bot.send_message(chat_id=chat_id, text=topic)
-        remember_sent_text(application, chat_id, sent, topic)
+        sent = await application.bot.send_message(
+            chat_id=chat_id,
+            text=topic,
+            entities=topic_entities,
+        )
+        remember_sent_text(application, chat_id, sent, raw_topic)
         now = utc_now()
         application.bot_data.setdefault("last_topic_at", {})[chat_id] = now
         try:
-            store.record_topic(chat_id, topic, at=now.timestamp(), weekly=weekly)
+            store.record_topic(chat_id, raw_topic, at=now.timestamp(), weekly=weekly)
             application.bot_data.setdefault("recent_topics", {})[chat_id] = store.recent_topics(chat_id)
         except Exception:
             log.exception("Could not persist discussion topic")
             recent = application.bot_data.setdefault("recent_topics", {}).setdefault(chat_id, [])
-            recent.append(topic)
+            recent.append(raw_topic)
             application.bot_data["recent_topics"][chat_id] = recent[-12:]
         return True
     except Exception as exc:
