@@ -276,6 +276,14 @@ def format_recent_conversation(
     return "\n".join(reversed(lines))
 
 
+def telegram_entity_text(text: str, offset: int, length: int) -> str:
+    """Slice a Telegram entity using Bot API UTF-16 code-unit offsets."""
+    encoded = text.encode("utf-16-le")
+    start = max(0, int(offset)) * 2
+    end = max(start, (int(offset) + int(length)) * 2)
+    return encoded[start:end].decode("utf-16-le", errors="ignore")
+
+
 def is_directly_addressed(message: Any, context: ContextTypes.DEFAULT_TYPE) -> bool:
     bot_id = context.application.bot_data.get("bot_id")
     bot_username = (context.application.bot_data.get("bot_username") or "").lower()
@@ -302,7 +310,7 @@ def is_directly_addressed(message: Any, context: ContextTypes.DEFAULT_TYPE) -> b
             if entity.user.id == bot_id:
                 return True
         if entity_type == "mention" and bot_username:
-            mention = text[entity.offset : entity.offset + entity.length].lstrip("@").lower()
+            mention = telegram_entity_text(text, entity.offset, entity.length).lstrip("@").lower()
             if mention == bot_username:
                 return True
     return False
