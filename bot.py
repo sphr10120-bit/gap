@@ -852,7 +852,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         if user and user.id == API_OWNER_TELEGRAM_ID:
             text += "\n\nمدیریت API: /apis برای دیدن وضعیت، /xmodels برای بررسی دسترسی مدل‌های XingChi، "
-            text += "و /setapi coarena یا /setapi xingchi برای سوییچ API."
+            text += "و /xtest برای آزمودن یک درخواست کوتاه (ممکن است سهمیه مصرف کند). "
+            text += "/setapi coarena یا /setapi xingchi برای سوییچ API."
         await update.effective_message.reply_text(text)
 
 
@@ -963,6 +964,60 @@ async def xingchi_models_command(update: Update, context: ContextTypes.DEFAULT_T
     await message.reply_text(
         f"بررسی کلید XingChi کامل شد.\nGPT-6 Astra (`gpt-6-astra`): {result}\n"
         f"مدل‌های شامل Astra: {details}"
+    )
+
+
+async def xingchi_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+    if not message or not chat:
+        return
+    if chat.type != ChatType.PRIVATE or not user or user.id != API_OWNER_TELEGRAM_ID:
+        await message.reply_text("این آزمون فقط در پیوی و برای مالک ربات فعال است.")
+        return
+    if not XINGCHI_API_KEY:
+        await message.reply_text("XINGCHI_API_KEY در Railway تنظیم نشده است.")
+        return
+    model = XINGCHI_MODEL
+    try:
+        answer = await provider_chat(
+            "xingchi",
+            model,
+            [{"role": "user", "content": "Reply with exactly OK."}],
+            max_tokens=8,
+        )
+    except httpx.HTTPStatusError as exc:
+        try:
+            payload = exc.response.json()
+        except ValueError:
+            payload = {}
+        error_obj = payload.get("error", {}) if isinstance(payload, dict) else {}
+        detail = (
+            error_obj.get("message", "") if isinstance(error_obj, dict)
+            else payload.get("message", "") if isinstance(payload, dict)
+            else ""
+        )
+        if not detail and isinstance(payload, dict):
+            detail = payload.get("message", "") or payload.get("code", "")
+        detail = str(detail).replace(XINGCHI_API_KEY, "[REDACTED]").strip()[:500]
+        log.error("XingChi owner test returned HTTP %s for model %s", exc.response.status_code, model)
+        await message.reply_text(
+            f"آزمون XingChi با HTTP {exc.response.status_code} شکست خورد.\n"
+            f"جزئیات سرویس: {detail or 'در پاسخ API توضیحی نبود.'}"
+        )
+        return
+    except httpx.HTTPError as exc:
+        log.warning("XingChi owner test failed: %s", exc.__class__.__name__)
+        await message.reply_text("آزمون XingChi به‌دلیل خطای اتصال انجام نشد؛ کمی بعد دوباره امتحان کن.")
+        return
+    except Exception:
+        log.exception("XingChi owner test failed unexpectedly")
+        await message.reply_text("آزمون XingChi به خطای داخلی خورد؛ جزئیات فنی در Railway Logs ثبت شد.")
+        return
+
+    await message.reply_text(
+        f"درخواست تولید پاسخ در XingChi موفق بود. مدل: {model}. پاسخ آزمایشی: {answer or '(خالی)'}"
     )
 
 
@@ -1764,6 +1819,7 @@ async def post_init(application: Application) -> None:
             BotCommand("status", "وضعیت و قابلیت‌های ربات"),
             BotCommand("apis", "وضعیت APIها؛ فقط مالک در پیوی"),
             BotCommand("xmodels", "بررسی فهرست مدل XingChi؛ فقط مالک در پیوی"),
+            BotCommand("xtest", "آزمون کوتاه XingChi؛ ممکن است سهمیه مصرف کند"),
             BotCommand("setapi", "سوییچ API؛ فقط مالک در پیوی"),
             BotCommand("poll", "ساخت نظرسنجی گیمی"),
             BotCommand("quiz", "ساخت کوییز گیمی"),
@@ -1812,6 +1868,7 @@ def main() -> None:
     application.add_handler(CommandHandler("status", status_command), group=0)
     application.add_handler(CommandHandler("apis", apis_command), group=0)
     application.add_handler(CommandHandler("xmodels", xingchi_models_command), group=0)
+    application.add_handler(CommandHandler("xtest", xingchi_test_command), group=0)
     application.add_handler(CommandHandler("setapi", setapi_command), group=0)
     application.add_handler(CommandHandler("poll", poll_command), group=0)
     application.add_handler(CommandHandler("quiz", quiz_command), group=0)
