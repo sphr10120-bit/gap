@@ -1395,10 +1395,10 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 def fallback_interaction(kind: str) -> dict[str, Any]:
     if kind == "quiz":
         return {
-            "question": "سازندهٔ کنسول Nintendo Switch کدام شرکت است؟",
-            "options": ["Nintendo", "Sony", "Microsoft", "Sega"],
+            "question": "در Bloodborne، بازپس‌گیری فوری بخشی از سلامتی با حمله‌کردن پس از ضربه‌خوردن چه نام دارد؟",
+            "options": ["Rally", "Insight", "Beasthood", "Visceral Attack"],
             "correct_option_id": 0,
-            "explanation": "Nintendo سازندهٔ خانوادهٔ کنسول‌های Switch است.",
+            "explanation": "Rally فرصت کوتاهی می‌دهد با حمله‌کردن بخشی از سلامتی ازدست‌رفته را پس بگیری.",
         }
     return {
         "question": "برای بازی بعدی، کدام سبک را بیشتر انتخاب می‌کنی؟",
@@ -1414,9 +1414,14 @@ async def generate_interaction(kind: str, provider: str, model: str) -> dict[str
     )
     if kind == "quiz":
         system += (
-            'ساختار: {"question":"...","options":["...","...","...","..."],'
+            '{"question":"...","options":["...","...","...","..."],'
             '"correct_option_id":0,"explanation":"..."}. '
-            "پرسش واقعیت‌محور و پاسخ درست را دقیق انتخاب کن؛ 3 یا 4 گزینه و توضیح حداکثر 180 نویسه."
+            "سطح دشواری متوسط رو به سخت، حدود 7 از 10 باشد. سؤال‌های بدیهی مثل نام سازندهٔ یک کنسول نساز؛ "
+            "به‌جایش یک دانستهٔ مشخص و نسبتاً جزئی دربارهٔ مکانیک، سیستم بازی، طراحی مرحله یا جزئیات فنیِ یک بازی کنسولی بپرس. "
+            "دقیقاً چهار گزینهٔ کوتاه و باورپذیر بده و فقط یک گزینه پاسخ درست باشد. "
+            "از سؤال سلیقه‌ای، lore مبهم، اطلاعات وابسته به آپدیت‌های تازه، چندپاسخی و اسپویل پایان داستان پرهیز کن. "
+            "فقط واقعیت پایدار و مطمئنی را انتخاب کن؛ اگر مطمئن نیستی، سؤال دیگری بساز. "
+            "توضیح حداکثر 180 نویسه باشد و روشن کند چرا گزینهٔ درست است."
         )
     else:
         system += (
@@ -1447,7 +1452,8 @@ async def generate_interaction(kind: str, provider: str, model: str) -> dict[str
         options = [item.strip()[:100] for item in raw_options if isinstance(item, str)]
         if len(options) != len(raw_options):
             return fallback
-        if not question or not 2 <= len(options) <= 4 or any(not option for option in options):
+        valid_option_count = len(options) == 4 if kind == "quiz" else 3 <= len(options) <= 4
+        if not question or not valid_option_count or any(not option for option in options):
             return fallback
         if len({option.casefold() for option in options}) != len(options):
             return fallback
