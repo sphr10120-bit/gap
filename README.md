@@ -1,6 +1,6 @@
 # ربات آغازگر گفت‌وگوی گیم کنسولی
 
-یک worker پایتون برای گروه تلگرام `@Pixel_Mediair` که پس از ۱۵ دقیقه سکوت یک بحث گیمی شروع می‌کند، هفته‌ای یک بحث ویژه، یک نظرسنجی و یک quiz می‌فرستد، و به منشن‌ها و ریپلای‌ها پاسخ می‌دهد. CoArena و RadoxAI هر دو به‌عنوان providerهای API سازگار با OpenAI پشتیبانی می‌شوند؛ مالک ربات می‌تواند API فعال را از پیوی عوض کند.
+یک worker پایتون برای گروه تلگرام `@Pixel_Mediair` که پس از ۱۵ دقیقه سکوت یک بحث گیمی شروع می‌کند، هفته‌ای یک بحث ویژه، یک نظرسنجی و یک quiz می‌فرستد، و به منشن‌ها و ریپلای‌ها پاسخ می‌دهد. CoArena و XingChi پشتیبانی می‌شوند؛ مالک ربات می‌تواند API فعال را از پیوی عوض کند.
 
 اگر به پیام یکی از اعضا ریپلای کنی و ربات را منشن کنی، ربات متن همان پیام را به‌عنوان موضوع اصلی پاسخ می‌گیرد و متن همراه منشن را به‌عنوان راهنمای اضافی در نظر می‌گیرد. اگر به پیام خود ربات ریپلای کنی، پیام قبلی فقط زمینه است و ربات به پیام تازهٔ تو جواب می‌دهد.
 
@@ -21,23 +21,23 @@
 - `/rememberme <ترجیح>` برای ثبت علاقه‌مندی گیمی خودت؛
 - `/forgetme` برای حذف حافظهٔ مرتبط با حساب خودت.
 
-در پیوی ربات، فقط مالک با شناسهٔ `8524573838` اجازه دارد `/apis` را برای دیدن وضعیت اتصال APIها و `/setapi coarena` یا `/setapi radoxai` را برای سوییچ API فعال اجرا کند. این فرمان فقط provider را عوض می‌کند؛ هر API از مدل تعریف‌شده در متغیرهای خودش (`COARENA_MODEL` یا `RADOXAI_MODEL`) استفاده می‌کند. انتخاب API در SQLite روی Volume ذخیره می‌شود و بعد از restart یا deploy باقی می‌ماند. فرمان در گروه یا برای حساب‌های دیگر API را تغییر نمی‌دهد.
+در پیوی ربات، فقط مالک با شناسهٔ `8524573838` اجازه دارد `/apis` را برای دیدن وضعیت اتصال APIها و `/setapi coarena` یا `/setapi xingchi` را برای سوییچ API فعال اجرا کند. این فرمان فقط provider را عوض می‌کند؛ هر API از مدل تعریف‌شده در متغیرهای خودش (`COARENA_MODEL` یا `XINGCHI_MODEL`) استفاده می‌کند. انتخاب API در SQLite روی Volume ذخیره می‌شود و بعد از restart یا deploy باقی می‌ماند. فرمان در گروه یا برای حساب‌های دیگر API را تغییر نمی‌دهد.
 
 نظرسنجی و quiz زمان‌بندی‌شده و دستی به‌صورت poll بومی تلگرام و با مهلت ۱۵ دقیقه‌ای ارسال می‌شوند. برای جلوگیری از شلوغی، هر نوع poll در گروه حداکثر هر ۱۲۰ ثانیه و `/weekly` دستی حداکثر هر ساعت قابل اجراست. سؤال‌ها از طریق API فعال ساخته می‌شوند؛ اگر API موقتاً در دسترس نباشد، ربات از سؤال پیش‌فرض استفاده می‌کند. موعدهای هفتگی در SQLite روی Volume باقی می‌مانند.
 
-اگر CoArena یا RadoxAI خطای موقت شبکه یا 5xx بدهد، درخواست حداکثر سه بار با مکث افزایشی و محدود دوباره ارسال می‌شود. خطاهای دائمی مثل کلید نامعتبر بیهوده تکرار نمی‌شوند.
+اگر CoArena یا XingChi خطای موقت شبکه یا 5xx بدهد، درخواست حداکثر سه بار با مکث افزایشی و محدود دوباره ارسال می‌شود. خطاهای دائمی مثل کلید نامعتبر بیهوده تکرار نمی‌شوند.
 
 لحن از طریق `BOT_TONE` انتخاب می‌شود: `friendly` برای لحن گرم و کمی صمیمی یا `serious` برای لحن جدی‌تر. مقدار پیش‌فرض `friendly` است. در هر دو حالت ربات از ایموجی و استیکر استفاده نمی‌کند.
 
 برای اینکه ربات سازنده را با احترام متعادل بشناسد، شناسهٔ عددی Telegram را با نام `CREATOR_TELEGRAM_ID` در Railway Variables قرار بده. این مقدار را فقط در تنظیمات خصوصی Railway وارد کن، نه در کد یا GitHub؛ ربات عدد را به مدل یا لاگ نمی‌فرستد. فقط وقتی پیام واقعاً از همان Telegram user ID باشد، prompt پاسخ لحن محترمانهٔ ویژه می‌گیرد؛ از تملق یا افشای شناسه جلوگیری شده است. سوییچ API فقط در پیوی و فقط برای شناسهٔ `API_OWNER_TELEGRAM_ID` مجاز است.
 
-مدل پیش‌فرض CoArena برابر `deepseek-v4-1-flash-1017` و مدل پیش‌فرض RadoxAI برابر `claude-sonnet-5` است؛ هرکدام با متغیر محیطی خودش قابل تنظیم است. با `LLM_PROVIDER` API آغازین را انتخاب کن؛ مالک بعد از راه‌اندازی می‌تواند فقط API فعال را از پیوی با `/setapi` عوض کند. برای پرسش‌های مربوط به خبر، آپدیت، تاریخ انتشار یا قیمت تازه، جست‌وجوی وب فعال می‌شود؛ نتیجهٔ RSS تا ۵ دقیقه cache می‌شود و با `NEWS_CACHE_TTL_SECONDS` قابل تنظیم است. برای جست‌وجوی RSS کلید دیگری لازم نیست.
+مدل پیش‌فرض CoArena برابر `deepseek-v4-1-flash-1017` است. مدل پیش‌فرض XingChi برابر `claude-sonnet-5` تنظیم شده تا انتخاب قبلی حفظ شود؛ اگر شناسهٔ دقیق این مدل در فهرست حساب XingChi متفاوت است، مقدار `XINGCHI_MODEL` را به همان شناسه تغییر بده. درخواست XingChi از مسیر Anthropic Messages API یعنی `/v1/messages` فرستاده می‌شود. با `LLM_PROVIDER` API آغازین را انتخاب کن؛ مالک بعد از راه‌اندازی می‌تواند API فعال را از پیوی با `/setapi` عوض کند. برای پرسش‌های مربوط به خبر، آپدیت، تاریخ انتشار یا قیمت تازه، جست‌وجوی وب فعال می‌شود؛ نتیجهٔ RSS تا ۵ دقیقه cache می‌شود و با `NEWS_CACHE_TTL_SECONDS` قابل تنظیم است. برای جست‌وجوی RSS کلید دیگری لازم نیست.
 
 ## تنظیم APIهای مدل
 
-برای CoArena در [صفحهٔ API CoArena](https://coarena.ai/account/api) و برای RadoxAI در [داشبورد RadoxAI](https://radoxai.com/dashboard) کلید بساز. کلیدها را فقط در Railway Variables با نام‌های `COARENA_API_KEY` و `RADOXAI_API_KEY` به‌صورت محرمانه تنظیم کن؛ دست‌کم یکی از این دو لازم است. هیچ‌کدام را در کد، چت یا repository نگذار.
+برای CoArena در [صفحهٔ API CoArena](https://coarena.ai/account/api) و برای XingChi در [صفحهٔ کلیدهای XingChi](https://xingchiapi.com/keys) کلید بساز. کلیدها را فقط در Railway Variables با نام‌های `COARENA_API_KEY` و `XINGCHI_API_KEY` به‌صورت محرمانه تنظیم کن؛ دست‌کم یکی از این دو لازم است. هیچ‌کدام را در کد، چت یا repository نگذار.
 
-endpoint پیش‌فرض CoArena برابر `https://coarena.ai/api/v1` و endpoint پیش‌فرض RadoxAI برابر `https://radoxai.com/v1` است. هر دو با `COARENA_BASE_URL` و `RADOXAI_BASE_URL` قابل تغییرند. مدل‌های شروع با `COARENA_MODEL` و `RADOXAI_MODEL` تنظیم می‌شوند و provider آغازین با `LLM_PROVIDER=coarena` یا `LLM_PROVIDER=radoxai` انتخاب می‌شود. API key رادوکس به مدل‌های RadoxAI دسترسی می‌دهد، اما RadoxAI واسطهٔ ثالث است، نه API رسمی OpenAI، Anthropic یا Google؛ درخواست‌های بات برای پردازش به ارائه‌دهندهٔ مدل انتخابی ارسال می‌شوند.
+endpoint پیش‌فرض CoArena برابر `https://coarena.ai/api/v1` است. XingChi به‌صورت پیش‌فرض از `https://api.xingchiapi.com/v1/messages` استفاده می‌کند؛ ریشهٔ سرویس را با `XINGCHI_BASE_URL` می‌توان تغییر داد. CoArena از مسیر Chat Completions و XingChi از قالب Anthropic Messages API استفاده می‌کند. مدل‌ها با `COARENA_MODEL` و `XINGCHI_MODEL` تنظیم می‌شوند و provider آغازین با `LLM_PROVIDER=coarena` یا `LLM_PROVIDER=xingchi` انتخاب می‌شود. شناسهٔ دقیق مدل را از صفحهٔ حساب/مدل‌های XingChi بردار و در `XINGCHI_MODEL` بگذار. XingChi یک gateway ثالث است، نه API رسمی OpenAI یا Anthropic؛ درخواست‌های بات برای پردازش به ارائه‌دهندهٔ مدل انتخابی ارسال می‌شوند.
 
 ## استقرار و نگهداری state در Railway
 
@@ -58,11 +58,11 @@ Railway طبق [راهنمای Volumeها](https://docs.railway.com/volumes) ف�
 ```text
 TELEGRAM_BOT_TOKEN=توکن BotFather
 COARENA_API_KEY=کلید API
-RADOXAI_API_KEY=کلید API اختیاری برای provider دوم
+XINGCHI_API_KEY=کلید API اختیاری برای provider دوم
 COARENA_BASE_URL=https://coarena.ai/api/v1
 COARENA_MODEL=deepseek-v4-1-flash-1017
-RADOXAI_BASE_URL=https://radoxai.com/v1
-RADOXAI_MODEL=claude-sonnet-5
+XINGCHI_BASE_URL=https://api.xingchiapi.com
+XINGCHI_MODEL=claude-sonnet-5
 LLM_PROVIDER=coarena
 BOT_TONE=friendly
 CREATOR_TELEGRAM_ID=<numeric_telegram_user_id>
@@ -89,7 +89,7 @@ NEWS_SEARCH_MAX_RESULTS=4
 NEWS_CACHE_TTL_SECONDS=300
 ```
 
-`TARGET_CHAT_ID` اختیاری است و برای گروه خصوصی یا گروهی که username آن قابل تشخیص نیست استفاده می‌شود. اگر متغیرهای قدیمی `FREEMODEL_API_KEY`, `FREEMODEL_BASE_URL` یا `FREEMODEL_MODEL` در Railway مانده‌اند، حذفشان کن؛ نسخهٔ فعلی از تنظیمات `COARENA_*` و `RADOXAI_*` پشتیبانی می‌کند.
+`TARGET_CHAT_ID` اختیاری است و برای گروه خصوصی یا گروهی که username آن قابل تشخیص نیست استفاده می‌شود. اگر متغیرهای قدیمی `RADOXAI_API_KEY`, `RADOXAI_BASE_URL` یا `RADOXAI_MODEL` در Railway مانده‌اند، آن‌ها را حذف و به‌جایش متغیرهای `XINGCHI_*` را تنظیم کن. متغیرهای قدیمی `FREEMODEL_*` را نیز حذف کن.
 
 ## آماده‌سازی تلگرام
 

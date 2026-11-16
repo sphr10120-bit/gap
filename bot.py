@@ -42,9 +42,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 COARENA_API_KEY = os.getenv("COARENA_API_KEY", "").strip()
 COARENA_BASE_URL = os.getenv("COARENA_BASE_URL", "https://coarena.ai/api/v1").rstrip("/")
 COARENA_MODEL = os.getenv("COARENA_MODEL", "deepseek-v4-1-flash-1017").strip()
-RADOXAI_API_KEY = os.getenv("RADOXAI_API_KEY", "").strip()
-RADOXAI_BASE_URL = os.getenv("RADOXAI_BASE_URL", "https://radoxai.com/v1").rstrip("/")
-RADOXAI_MODEL = os.getenv("RADOXAI_MODEL", "claude-sonnet-5").strip()
+XINGCHI_API_KEY = os.getenv("XINGCHI_API_KEY", "").strip()
+XINGCHI_BASE_URL = os.getenv("XINGCHI_BASE_URL", "https://api.xingchiapi.com").rstrip("/")
+XINGCHI_MODEL = os.getenv("XINGCHI_MODEL", "claude-sonnet-5").strip()
 LLM_DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "coarena").strip().lower()
 BOT_TONE = os.getenv("BOT_TONE", "friendly").strip().lower()
 BOT_DB_PATH = os.getenv("BOT_DB_PATH", "").strip()
@@ -98,10 +98,10 @@ if API_OWNER_TELEGRAM_ID <= 0:
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("Missing required environment variable: TELEGRAM_BOT_TOKEN")
-if not COARENA_API_KEY and not RADOXAI_API_KEY:
-    raise RuntimeError("Configure at least one provider API key: COARENA_API_KEY or RADOXAI_API_KEY")
-if LLM_DEFAULT_PROVIDER not in {"coarena", "radoxai"}:
-    raise RuntimeError("LLM_PROVIDER must be either 'coarena' or 'radoxai'.")
+if not COARENA_API_KEY and not XINGCHI_API_KEY:
+    raise RuntimeError("Configure at least one provider API key: COARENA_API_KEY or XINGCHI_API_KEY")
+if LLM_DEFAULT_PROVIDER not in {"coarena", "xingchi"}:
+    raise RuntimeError("LLM_PROVIDER must be either 'coarena' or 'xingchi'.")
 if BOT_TONE not in {"friendly", "serious"}:
     raise RuntimeError("BOT_TONE must be either 'friendly' or 'serious'.")
 if not BOT_DB_PATH:
@@ -389,8 +389,8 @@ def build_direct_reply_prompt(
 def provider_config(provider: str) -> dict[str, str]:
     if provider == "coarena":
         return {"api_key": COARENA_API_KEY, "base_url": COARENA_BASE_URL}
-    if provider == "radoxai":
-        return {"api_key": RADOXAI_API_KEY, "base_url": RADOXAI_BASE_URL}
+    if provider == "xingchi":
+        return {"api_key": XINGCHI_API_KEY, "base_url": XINGCHI_BASE_URL}
     raise ValueError("Unknown model provider")
 
 
@@ -409,20 +409,37 @@ async def provider_chat(
         "Authorization": f"Bearer {config['api_key']}",
         "Content-Type": "application/json",
     }
-    body = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "stream": False,
-    }
+    if provider == "xingchi":
+        headers["anthropic-version"] = "2023-06-01"
+        system_parts = [str(item.get("content", "")) for item in messages if item.get("role") == "system"]
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": item["role"], "content": item.get("content", "")}
+                for item in messages if item.get("role") in {"user", "assistant"}
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if system_parts:
+            body["system"] = "\n\n".join(system_parts)
+        request_url = f"{config['base_url']}/v1/messages"
+    else:
+        body = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": False,
+        }
+        request_url = f"{config['base_url']}/chat/completions"
     retryable_statuses = {408, 425, 500, 502, 503, 504}
     payload: dict[str, Any] | None = None
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=15.0)) as client:
         for attempt in range(1, 4):
             try:
                 response = await client.post(
-                    f"{config['base_url']}/chat/completions",
+                    request_url,
                     headers=headers,
                     json=body,
                 )
@@ -453,6 +470,15 @@ async def provider_chat(
                 await asyncio.sleep(delay)
     if payload is None:
         return ""
+    if provider == "xingchi":
+        content = payload.get("content") or ""
+        if isinstance(content, list):
+            content = "".join(
+                block.get("text", "") for block in content
+                if isinstance(block, dict) and block.get("type", "text") == "text"
+            )
+        if content:
+            return str(content).strip()
     choices = payload.get("choices") or []
     if not choices:
         return ""
@@ -819,7 +845,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "برای ثبت سلیقهٔ گیمی خودت /rememberme و برای پاک‌کردن حافظهٔ خودت /forgetme را بزن."
         )
         if user and user.id == API_OWNER_TELEGRAM_ID:
-            text += "\n\nمدیریت API: /apis برای دیدن وضعیت APIها، /setapi coarena یا /setapi radoxai برای سوییچ API."
+            text += "\n\nمدیریت API: /apis برای دیدن وضعیت APIها، /setapi coarena یا /setapi xingchi برای سوییچ API."
         await update.effective_message.reply_text(text)
 
 
@@ -863,11 +889,11 @@ async def apis_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     active_provider = context.application.bot_data.get("provider", "نامشخص")
     lines = [
         f"API فعال: {active_provider}",
-        "برای سوییچ: /setapi coarena یا /setapi radoxai",
+        "برای سوییچ: /setapi coarena یا /setapi xingchi",
         "وضعیت APIها:",
     ]
-    for provider in ("coarena", "radoxai"):
-        model = COARENA_MODEL if provider == "coarena" else RADOXAI_MODEL
+    for provider in ("coarena", "xingchi"):
+        model = COARENA_MODEL if provider == "coarena" else XINGCHI_MODEL
         status = "آمادهٔ انتخاب" if provider_config(provider)["api_key"] else "کلید API تنظیم نشده"
         lines.append(f"- {provider}: {status}؛ مدل پیکربندی‌شده: {model}")
     await message.reply_text("\n".join(lines))
@@ -887,14 +913,14 @@ async def setapi_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     if len(context.args) != 1:
         await message.reply_text(
-            "روش استفاده:\n/setapi coarena\n/setapi radoxai\n\n"
+            "روش استفاده:\n/setapi coarena\n/setapi xingchi\n\n"
             "برای دیدن APIهای تنظیم‌شده، /apis را بزن."
         )
         return
 
     provider = context.args[0].strip().lower()
-    if provider not in {"coarena", "radoxai"}:
-        await message.reply_text("provider باید coarena یا radoxai باشد.")
+    if provider not in {"coarena", "xingchi"}:
+        await message.reply_text("provider باید coarena یا xingchi باشد.")
         return
     if not provider_config(provider)["api_key"]:
         await message.reply_text(f"کلید API برای {provider} تنظیم نشده است؛ API تغییر نکرد.")
@@ -912,7 +938,7 @@ async def setapi_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     context.application.bot_data["provider"] = provider
-    context.application.bot_data["model"] = COARENA_MODEL if provider == "coarena" else RADOXAI_MODEL
+    context.application.bot_data["model"] = COARENA_MODEL if provider == "coarena" else XINGCHI_MODEL
     await message.reply_text(f"API فعال با موفقیت به {provider} تغییر کرد و پس از راه‌اندازی مجدد هم حفظ می‌شود.")
 
 
@@ -1497,10 +1523,10 @@ async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 def initial_api_selection(store: StateStore) -> str:
     preferred = LLM_DEFAULT_PROVIDER
     if not provider_config(preferred)["api_key"]:
-        preferred = "radoxai" if preferred == "coarena" else "coarena"
+        preferred = "xingchi" if preferred == "coarena" else "coarena"
     saved_provider = (store.get_setting("active_provider") or "").strip().lower()
     if (
-        saved_provider in {"coarena", "radoxai"}
+        saved_provider in {"coarena", "xingchi"}
         and provider_config(saved_provider)["api_key"]
     ):
         return saved_provider
@@ -1644,7 +1670,7 @@ async def post_init(application: Application) -> None:
     application.bot_data["bot_id"] = me.id
     application.bot_data["bot_username"] = me.username or ""
     provider = initial_api_selection(store)
-    model = COARENA_MODEL if provider == "coarena" else RADOXAI_MODEL
+    model = COARENA_MODEL if provider == "coarena" else XINGCHI_MODEL
     application.bot_data["provider"] = provider
     application.bot_data["model"] = model
     try:
