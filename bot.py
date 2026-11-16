@@ -409,7 +409,9 @@ async def provider_chat(
         "Authorization": f"Bearer {config['api_key']}",
         "Content-Type": "application/json",
     }
-    if provider == "xingchi":
+    xingchi_claude_model = provider == "xingchi" and model.casefold().startswith("claude-")
+    xingchi_gpt6_model = provider == "xingchi" and model.casefold().startswith("gpt-6")
+    if xingchi_claude_model:
         headers["anthropic-version"] = "2023-06-01"
         system_parts = [str(item.get("content", "")) for item in messages if item.get("role") == "system"]
         body: dict[str, Any] = {
@@ -425,14 +427,18 @@ async def provider_chat(
             body["system"] = "\n\n".join(system_parts)
         request_url = f"{config['base_url']}/v1/messages"
     else:
-        body = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "stream": False,
-        }
-        request_url = f"{config['base_url']}/chat/completions"
+        body = {"model": model, "messages": messages, "stream": False}
+        if xingchi_gpt6_model:
+            body["max_completion_tokens"] = max_tokens
+        else:
+            body["max_tokens"] = max_tokens
+        if not xingchi_gpt6_model:
+            body["temperature"] = temperature
+        request_url = (
+            f"{config['base_url']}/v1/chat/completions"
+            if provider == "xingchi"
+            else f"{config['base_url']}/chat/completions"
+        )
     retryable_statuses = {408, 425, 500, 502, 503, 504}
     payload: dict[str, Any] | None = None
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=15.0)) as client:
@@ -470,7 +476,7 @@ async def provider_chat(
                 await asyncio.sleep(delay)
     if payload is None:
         return ""
-    if provider == "xingchi":
+    if xingchi_claude_model:
         content = payload.get("content") or ""
         if isinstance(content, list):
             content = "".join(
@@ -1223,6 +1229,11 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 notice = (
                     f"پیامت و پیامِ ریپلای‌شده را دریافت کردم، اما سرویس {provider} درخواست مدل را با خطای 402 رد کرد. "
                     "فعلاً نمی‌توانم پاسخ هوش‌مصنوعی بسازم؛ اعتبار یا دسترسی مدل API باید بررسی شود."
+                )
+            elif exc.response.status_code == 403 and provider == "xingchi" and model.casefold() == "gpt-6-astra":
+                notice = (
+                    "XingChi دسترسی درخواست GPT-6 Astra را با خطای 403 رد کرد. نسخهٔ تازه درخواست را از مسیر GPT می‌فرستد؛ "
+                    "اگر خطا بعد از به‌روزرسانی هم ادامه داشت، دسترسی کلید و فعال‌بودن این مدل را در حساب XingChi بررسی کن."
                 )
             else:
                 notice = (
