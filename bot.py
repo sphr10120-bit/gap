@@ -43,10 +43,12 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 COARENA_API_KEY = os.getenv("COARENA_API_KEY", "").strip()
 COARENA_BASE_URL = os.getenv("COARENA_BASE_URL", "https://coarena.ai/api/v1").rstrip("/")
 COARENA_MODEL = os.getenv("COARENA_MODEL", "deepseek-v4-1-flash-1017").strip()
-XINGCHI_API_KEY = os.getenv("XINGCHI_API_KEY", "").strip()
-XINGCHI_BASE_URL = os.getenv("XINGCHI_BASE_URL", "https://api.xingchiapi.com").rstrip("/")
-XINGCHI_MODEL = os.getenv("XINGCHI_MODEL", "gpt-6-astra").strip()
+APMIX_API_KEY = os.getenv("APMIX_API_KEY", "").strip()
+APMIX_BASE_URL = os.getenv("APMIX_BASE_URL", "https://api.apmix.ai/v1").rstrip("/")
+APMIX_MODEL = os.getenv("APMIX_MODEL", "gpt-6-astra").strip()
 LLM_DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "coarena").strip().lower()
+if LLM_DEFAULT_PROVIDER == "xingchi":
+    LLM_DEFAULT_PROVIDER = "apmix"
 BOT_TONE = os.getenv("BOT_TONE", "friendly").strip().lower()
 BOT_DB_PATH = os.getenv("BOT_DB_PATH", "").strip()
 if not BOT_DB_PATH:
@@ -99,10 +101,10 @@ if API_OWNER_TELEGRAM_ID <= 0:
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("Missing required environment variable: TELEGRAM_BOT_TOKEN")
-if not COARENA_API_KEY and not XINGCHI_API_KEY:
-    raise RuntimeError("Configure at least one provider API key: COARENA_API_KEY or XINGCHI_API_KEY")
-if LLM_DEFAULT_PROVIDER not in {"coarena", "xingchi"}:
-    raise RuntimeError("LLM_PROVIDER must be either 'coarena' or 'xingchi'.")
+if not COARENA_API_KEY and not APMIX_API_KEY:
+    raise RuntimeError("Configure at least one provider API key: COARENA_API_KEY or APMIX_API_KEY")
+if LLM_DEFAULT_PROVIDER not in {"coarena", "apmix"}:
+    raise RuntimeError("LLM_PROVIDER must be either 'coarena' or 'apmix'.")
 if BOT_TONE not in {"friendly", "serious"}:
     raise RuntimeError("BOT_TONE must be either 'friendly' or 'serious'.")
 if not BOT_DB_PATH:
@@ -390,8 +392,8 @@ def build_direct_reply_prompt(
 def provider_config(provider: str) -> dict[str, str]:
     if provider == "coarena":
         return {"api_key": COARENA_API_KEY, "base_url": COARENA_BASE_URL}
-    if provider == "xingchi":
-        return {"api_key": XINGCHI_API_KEY, "base_url": XINGCHI_BASE_URL}
+    if provider == "apmix":
+        return {"api_key": APMIX_API_KEY, "base_url": APMIX_BASE_URL}
     raise ValueError("Unknown model provider")
 
 
@@ -410,36 +412,14 @@ async def provider_chat(
         "Authorization": f"Bearer {config['api_key']}",
         "Content-Type": "application/json",
     }
-    xingchi_claude_model = provider == "xingchi" and model.casefold().startswith("claude-")
-    xingchi_gpt6_model = provider == "xingchi" and model.casefold().startswith("gpt-6")
-    if xingchi_claude_model:
-        headers["anthropic-version"] = "2023-06-01"
-        system_parts = [str(item.get("content", "")) for item in messages if item.get("role") == "system"]
-        body: dict[str, Any] = {
-            "model": model,
-            "messages": [
-                {"role": item["role"], "content": item.get("content", "")}
-                for item in messages if item.get("role") in {"user", "assistant"}
-            ],
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        if system_parts:
-            body["system"] = "\n\n".join(system_parts)
-        request_url = f"{config['base_url']}/v1/messages"
+    gpt6_model = model.casefold().startswith("gpt-6")
+    body: dict[str, Any] = {"model": model, "messages": messages, "stream": False}
+    if gpt6_model:
+        body["max_completion_tokens"] = max_tokens
     else:
-        body = {"model": model, "messages": messages, "stream": False}
-        if xingchi_gpt6_model:
-            body["max_completion_tokens"] = max_tokens
-        else:
-            body["max_tokens"] = max_tokens
-        if not xingchi_gpt6_model:
-            body["temperature"] = temperature
-        request_url = (
-            f"{config['base_url']}/v1/chat/completions"
-            if provider == "xingchi"
-            else f"{config['base_url']}/chat/completions"
-        )
+        body["max_tokens"] = max_tokens
+        body["temperature"] = temperature
+    request_url = f"{config['base_url']}/chat/completions"
     retryable_statuses = {408, 425, 500, 502, 503, 504}
     payload: dict[str, Any] | None = None
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=15.0)) as client:
@@ -477,15 +457,6 @@ async def provider_chat(
                 await asyncio.sleep(delay)
     if payload is None:
         return ""
-    if xingchi_claude_model:
-        content = payload.get("content") or ""
-        if isinstance(content, list):
-            content = "".join(
-                block.get("text", "") for block in content
-                if isinstance(block, dict) and block.get("type", "text") == "text"
-            )
-        if content:
-            return str(content).strip()
     choices = payload.get("choices") or []
     if not choices:
         return ""
@@ -852,9 +823,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "برای ثبت سلیقهٔ گیمی خودت /rememberme و برای پاک‌کردن حافظهٔ خودت /forgetme را بزن."
         )
         if user and user.id == API_OWNER_TELEGRAM_ID:
-            text += "\n\nمدیریت API: /apis برای دیدن وضعیت، /xmodels برای بررسی دسترسی مدل‌های XingChi، "
-            text += "و /xtest برای آزمودن یک درخواست کوتاه (ممکن است سهمیه مصرف کند). "
-            text += "/setapi coarena یا /setapi xingchi برای سوییچ API."
+            text += "\n\nمدیریت API: /apis برای دیدن وضعیت، /apmixmodels برای بررسی مدل‌های قابل‌دسترسی APmix، "
+            text += "و /apmixtest برای آزمودن یک درخواست کوتاه (ممکن است سهمیه مصرف کند). "
+            text += "/setapi coarena یا /setapi apmix برای سوییچ API."
         await update.effective_message.reply_text(text)
 
 
@@ -898,17 +869,17 @@ async def apis_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     active_provider = context.application.bot_data.get("provider", "نامشخص")
     lines = [
         f"API فعال: {active_provider}",
-        "برای سوییچ: /setapi coarena یا /setapi xingchi",
+        "برای سوییچ: /setapi coarena یا /setapi apmix",
         "وضعیت APIها:",
     ]
-    for provider in ("coarena", "xingchi"):
-        model = COARENA_MODEL if provider == "coarena" else XINGCHI_MODEL
+    for provider in ("coarena", "apmix"):
+        model = COARENA_MODEL if provider == "coarena" else APMIX_MODEL
         status = "آمادهٔ انتخاب" if provider_config(provider)["api_key"] else "کلید API تنظیم نشده"
         lines.append(f"- {provider}: {status}؛ مدل پیکربندی‌شده: {model}")
     await message.reply_text("\n".join(lines))
 
 
-async def xingchi_models_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def apmix_models_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
@@ -917,36 +888,36 @@ async def xingchi_models_command(update: Update, context: ContextTypes.DEFAULT_T
     if chat.type != ChatType.PRIVATE or not user or user.id != API_OWNER_TELEGRAM_ID:
         await message.reply_text("برای امنیت، این بررسی فقط در پیوی و برای مالک ربات فعال است.")
         return
-    config = provider_config("xingchi")
+    config = provider_config("apmix")
     if not config["api_key"]:
-        await message.reply_text("XINGCHI_API_KEY در Railway تنظیم نشده است.")
+        await message.reply_text("APMIX_API_KEY در Railway تنظیم نشده است.")
         return
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=8.0)) as client:
             response = await client.get(
-                f"{config['base_url']}/v1/models",
+                f"{config['base_url']}/models",
                 headers={"Authorization": f"Bearer {config['api_key']}"},
             )
             response.raise_for_status()
             payload = response.json()
     except httpx.HTTPStatusError as exc:
-        log.error("XingChi model-list request returned HTTP %s", exc.response.status_code)
+        log.error("APmix model-list request returned HTTP %s", exc.response.status_code)
         await message.reply_text(
-            f"XingChi فهرست مدل‌ها را با خطای HTTP {exc.response.status_code} رد کرد. "
-            "اگر 401 یا 403 است، کلید یا دسترسی حساب را در داشبورد XingChi بررسی کن."
+            f"APmix فهرست مدل‌ها را با خطای HTTP {exc.response.status_code} رد کرد. "
+            "کلید یا وضعیت پلن را در داشبورد APmix بررسی کن."
         )
         return
     except httpx.HTTPError as exc:
-        log.warning("XingChi model-list request failed: %s", exc.__class__.__name__)
-        await message.reply_text("به endpoint فهرست مدل‌های XingChi وصل نشدم؛ کمی بعد دوباره امتحان کن.")
+        log.warning("APmix model-list request failed: %s", exc.__class__.__name__)
+        await message.reply_text("به endpoint فهرست مدل‌های APmix وصل نشدم؛ کمی بعد دوباره امتحان کن.")
         return
     except (ValueError, TypeError):
-        await message.reply_text("پاسخ فهرست مدل‌های XingChi قابل‌خواندن نبود.")
+        await message.reply_text("پاسخ فهرست مدل‌های APmix قابل‌خواندن نبود.")
         return
 
     if not isinstance(payload, dict):
-        await message.reply_text("پاسخ فهرست مدل‌های XingChi قالب موردانتظار را نداشت.")
+        await message.reply_text("پاسخ فهرست مدل‌های APmix قالب موردانتظار را نداشت.")
         return
     items = payload.get("data") or payload.get("models") or []
     model_ids = [
@@ -958,17 +929,17 @@ async def xingchi_models_command(update: Update, context: ContextTypes.DEFAULT_T
         await message.reply_text("کلید پاسخ داد، اما فهرست مدل خالی بود یا قالب آن شناخته‌شده نبود.")
         return
 
-    target_available = any(model_id.casefold() == "gpt-6-astra" for model_id in model_ids)
-    astra_models = [model_id for model_id in model_ids if "astra" in model_id.casefold()]
-    result = "در فهرست کلید XingChi هست." if target_available else "در فهرست کلید XingChi دیده نشد."
-    details = ", ".join(astra_models[:10]) if astra_models else "مدل Astra دیگری هم برنگشت."
+    target_available = any(model_id.casefold() == APMIX_MODEL.casefold() for model_id in model_ids)
+    relevant_models = [model_id for model_id in model_ids if "gpt-6" in model_id.casefold()]
+    result = "در فهرست قابل‌دسترسی این کلید هست." if target_available else "در فهرست قابل‌دسترسی این کلید دیده نشد."
+    details = ", ".join(relevant_models[:10]) if relevant_models else ", ".join(model_ids[:10])
     await message.reply_text(
-        f"بررسی کلید XingChi کامل شد.\nGPT-6 Astra (`gpt-6-astra`): {result}\n"
-        f"مدل‌های شامل Astra: {details}"
+        f"بررسی کلید APmix کامل شد.\nمدل `{APMIX_MODEL}`: {result}\n"
+        f"مدل‌های مرتبط: {details}"
     )
 
 
-async def xingchi_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def apmix_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
@@ -977,13 +948,13 @@ async def xingchi_test_command(update: Update, context: ContextTypes.DEFAULT_TYP
     if chat.type != ChatType.PRIVATE or not user or user.id != API_OWNER_TELEGRAM_ID:
         await message.reply_text("این آزمون فقط در پیوی و برای مالک ربات فعال است.")
         return
-    if not XINGCHI_API_KEY:
-        await message.reply_text("XINGCHI_API_KEY در Railway تنظیم نشده است.")
+    if not APMIX_API_KEY:
+        await message.reply_text("APMIX_API_KEY در Railway تنظیم نشده است.")
         return
-    model = XINGCHI_MODEL
+    model = APMIX_MODEL
     try:
         answer = await provider_chat(
-            "xingchi",
+            "apmix",
             model,
             [{"role": "user", "content": "Reply with exactly OK."}],
             max_tokens=8,
@@ -1001,24 +972,26 @@ async def xingchi_test_command(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         if not detail and isinstance(payload, dict):
             detail = payload.get("message", "") or payload.get("code", "")
-        detail = str(detail).replace(XINGCHI_API_KEY, "[REDACTED]").strip()[:500]
-        log.error("XingChi owner test returned HTTP %s for model %s", exc.response.status_code, model)
+        detail = str(detail).replace(APMIX_API_KEY, "[REDACTED]").strip()[:500]
+        request_id = exc.response.headers.get("x-apmix-request-id", "")[:100]
+        log.error("APmix owner test returned HTTP %s for model %s", exc.response.status_code, model)
         await message.reply_text(
-            f"آزمون XingChi با HTTP {exc.response.status_code} شکست خورد.\n"
+            f"آزمون APmix با HTTP {exc.response.status_code} شکست خورد.\n"
             f"جزئیات سرویس: {detail or 'در پاسخ API توضیحی نبود.'}"
+            + (f"\nشناسهٔ درخواست: {request_id}" if request_id else "")
         )
         return
     except httpx.HTTPError as exc:
-        log.warning("XingChi owner test failed: %s", exc.__class__.__name__)
-        await message.reply_text("آزمون XingChi به‌دلیل خطای اتصال انجام نشد؛ کمی بعد دوباره امتحان کن.")
+        log.warning("APmix owner test failed: %s", exc.__class__.__name__)
+        await message.reply_text("آزمون APmix به‌دلیل خطای اتصال انجام نشد؛ کمی بعد دوباره امتحان کن.")
         return
     except Exception:
-        log.exception("XingChi owner test failed unexpectedly")
-        await message.reply_text("آزمون XingChi به خطای داخلی خورد؛ جزئیات فنی در Railway Logs ثبت شد.")
+        log.exception("APmix owner test failed unexpectedly")
+        await message.reply_text("آزمون APmix به خطای داخلی خورد؛ جزئیات فنی در Railway Logs ثبت شد.")
         return
 
     await message.reply_text(
-        f"درخواست تولید پاسخ در XingChi موفق بود. مدل: {model}. پاسخ آزمایشی: {answer or '(خالی)'}"
+        f"درخواست تولید پاسخ در APmix موفق بود. مدل: {model}. پاسخ آزمایشی: {answer or '(خالی)'}"
     )
 
 
@@ -1036,14 +1009,14 @@ async def setapi_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     if len(context.args) != 1:
         await message.reply_text(
-            "روش استفاده:\n/setapi coarena\n/setapi xingchi\n\n"
+            "روش استفاده:\n/setapi coarena\n/setapi apmix\n\n"
             "برای دیدن APIهای تنظیم‌شده، /apis را بزن."
         )
         return
 
     provider = context.args[0].strip().lower()
-    if provider not in {"coarena", "xingchi"}:
-        await message.reply_text("provider باید coarena یا xingchi باشد.")
+    if provider not in {"coarena", "apmix"}:
+        await message.reply_text("provider باید coarena یا apmix باشد.")
         return
     if not provider_config(provider)["api_key"]:
         await message.reply_text(f"کلید API برای {provider} تنظیم نشده است؛ API تغییر نکرد.")
@@ -1061,7 +1034,7 @@ async def setapi_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     context.application.bot_data["provider"] = provider
-    context.application.bot_data["model"] = COARENA_MODEL if provider == "coarena" else XINGCHI_MODEL
+    context.application.bot_data["model"] = COARENA_MODEL if provider == "coarena" else APMIX_MODEL
     await message.reply_text(f"API فعال با موفقیت به {provider} تغییر کرد و پس از راه‌اندازی مجدد هم حفظ می‌شود.")
 
 
@@ -1360,10 +1333,10 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                     f"پیامت و پیامِ ریپلای‌شده را دریافت کردم، اما سرویس {provider} درخواست مدل را با خطای 402 رد کرد. "
                     "فعلاً نمی‌توانم پاسخ هوش‌مصنوعی بسازم؛ اعتبار یا دسترسی مدل API باید بررسی شود."
                 )
-            elif exc.response.status_code == 403 and provider == "xingchi" and model.casefold() == "gpt-6-astra":
+            elif exc.response.status_code == 403 and provider == "apmix":
                 notice = (
-                    "XingChi دسترسی درخواست GPT-6 Astra را با خطای 403 رد کرد. نسخهٔ تازه درخواست را از مسیر GPT می‌فرستد؛ "
-                    "اگر خطا بعد از به‌روزرسانی هم ادامه داشت، دسترسی کلید و فعال‌بودن این مدل را در حساب XingChi بررسی کن."
+                    f"APmix دسترسی مدل {model} را با خطای 403 رد کرد. مالک می‌تواند در پیوی /apmixtest را اجرا کند؛ "
+                    "ممکن است مدل در پلن این کلید نباشد یا وضعیت حساب نیاز به بررسی داشته باشد."
                 )
             else:
                 notice = (
@@ -1768,10 +1741,17 @@ async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 def initial_api_selection(store: StateStore) -> str:
     preferred = LLM_DEFAULT_PROVIDER
     if not provider_config(preferred)["api_key"]:
-        preferred = "xingchi" if preferred == "coarena" else "coarena"
+        preferred = "apmix" if preferred == "coarena" else "coarena"
     saved_provider = (store.get_setting("active_provider") or "").strip().lower()
+    if saved_provider == "xingchi":
+        saved_provider = "apmix"
+        if APMIX_API_KEY:
+            try:
+                store.set_setting("active_provider", "apmix")
+            except Exception:
+                log.exception("Could not migrate saved XingChi selection to APmix")
     if (
-        saved_provider in {"coarena", "xingchi"}
+        saved_provider in {"coarena", "apmix"}
         and provider_config(saved_provider)["api_key"]
     ):
         return saved_provider
@@ -1915,7 +1895,7 @@ async def post_init(application: Application) -> None:
     application.bot_data["bot_id"] = me.id
     application.bot_data["bot_username"] = me.username or ""
     provider = initial_api_selection(store)
-    model = COARENA_MODEL if provider == "coarena" else XINGCHI_MODEL
+    model = COARENA_MODEL if provider == "coarena" else APMIX_MODEL
     application.bot_data["provider"] = provider
     application.bot_data["model"] = model
     try:
@@ -1923,8 +1903,8 @@ async def post_init(application: Application) -> None:
             BotCommand("start", "معرفی ربات"),
             BotCommand("status", "وضعیت و قابلیت‌های ربات"),
             BotCommand("apis", "وضعیت APIها؛ فقط مالک در پیوی"),
-            BotCommand("xmodels", "بررسی فهرست مدل XingChi؛ فقط مالک در پیوی"),
-            BotCommand("xtest", "آزمون کوتاه XingChi؛ ممکن است سهمیه مصرف کند"),
+            BotCommand("apmixmodels", "بررسی مدل‌های قابل‌دسترسی APmix؛ فقط مالک در پیوی"),
+            BotCommand("apmixtest", "آزمون کوتاه APmix؛ ممکن است سهمیه مصرف کند"),
             BotCommand("setapi", "سوییچ API؛ فقط مالک در پیوی"),
             BotCommand("poll", "ساخت نظرسنجی گیمی"),
             BotCommand("quiz", "ساخت کوییز گیمی"),
@@ -1972,8 +1952,8 @@ def main() -> None:
     application.add_handler(CommandHandler("id", id_command), group=0)
     application.add_handler(CommandHandler("status", status_command), group=0)
     application.add_handler(CommandHandler("apis", apis_command), group=0)
-    application.add_handler(CommandHandler("xmodels", xingchi_models_command), group=0)
-    application.add_handler(CommandHandler("xtest", xingchi_test_command), group=0)
+    application.add_handler(CommandHandler("apmixmodels", apmix_models_command), group=0)
+    application.add_handler(CommandHandler("apmixtest", apmix_test_command), group=0)
     application.add_handler(CommandHandler("setapi", setapi_command), group=0)
     application.add_handler(CommandHandler("poll", poll_command), group=0)
     application.add_handler(CommandHandler("quiz", quiz_command), group=0)

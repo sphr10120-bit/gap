@@ -1,6 +1,6 @@
 # ربات آغازگر گفت‌وگوی گیم کنسولی
 
-یک worker پایتون برای گروه تلگرام `@Pixel_Mediair` که پس از ۱۵ دقیقه سکوت یک بحث گیمی شروع می‌کند، هفته‌ای یک بحث ویژه، یک نظرسنجی و یک quiz می‌فرستد، و به منشن‌ها و ریپلای‌ها پاسخ می‌دهد. CoArena و XingChi پشتیبانی می‌شوند؛ مالک ربات می‌تواند API فعال را از پیوی عوض کند.
+یک worker پایتون برای گروه تلگرام `@Pixel_Mediair` که پس از ۱۵ دقیقه سکوت یک بحث گیمی شروع می‌کند، هفته‌ای یک بحث ویژه، یک نظرسنجی و یک quiz می‌فرستد، و به منشن‌ها و ریپلای‌ها پاسخ می‌دهد. CoArena و APmix پشتیبانی می‌شوند؛ مالک ربات می‌تواند API فعال را از پیوی عوض کند.
 
 اگر به پیام یکی از اعضا ریپلای کنی و ربات را منشن کنی، ربات متن همان پیام را به‌عنوان موضوع اصلی پاسخ می‌گیرد و متن همراه منشن را به‌عنوان راهنمای اضافی در نظر می‌گیرد. اگر به پیام خود ربات ریپلای کنی، پیام قبلی فقط زمینه است و ربات به پیام تازهٔ تو جواب می‌دهد.
 
@@ -21,23 +21,23 @@
 - `/rememberme <ترجیح>` برای ثبت علاقه‌مندی گیمی خودت؛
 - `/forgetme` برای حذف حافظهٔ مرتبط با حساب خودت.
 
-در پیوی ربات، فقط مالک با شناسهٔ `8524573838` اجازه دارد `/apis` را برای دیدن وضعیت، `/xmodels` را برای بررسی فهرست مدل‌های مجاز XingChi، و `/setapi coarena` یا `/setapi xingchi` را برای سوییچ API فعال اجرا کند. دستور `/xtest` یک درخواست بسیار کوتاه با همان مدل فعال می‌فرستد و علت خطا را در پیوی نشان می‌دهد؛ ممکن است مقدار کمی از سهمیه مصرف شود. این فرمان‌ها فقط در پیوی برای مالک فعال‌اند. سوییچ فقط provider را عوض می‌کند؛ هر API از مدل تعریف‌شده در متغیرهای خودش (`COARENA_MODEL` یا `XINGCHI_MODEL`) استفاده می‌کند. انتخاب API در SQLite روی Volume ذخیره می‌شود و بعد از restart یا deploy باقی می‌ماند.
+در پیوی ربات، فقط مالک با شناسهٔ `8524573838` اجازه دارد `/apis` را برای دیدن وضعیت، `/apmixmodels` را برای بررسی فهرست مدل‌های قابل‌دسترسی APmix، و `/setapi coarena` یا `/setapi apmix` را برای سوییچ API فعال اجرا کند. دستور `/apmixtest` یک درخواست بسیار کوتاه با همان مدل فعال می‌فرستد و علت خطا را در پیوی نشان می‌دهد؛ ممکن است مقدار کمی از سهمیه مصرف شود. این فرمان‌ها فقط در پیوی برای مالک فعال‌اند. سوییچ فقط provider را عوض می‌کند؛ هر API از مدل تعریف‌شده در متغیرهای خودش (`COARENA_MODEL` یا `APMIX_MODEL`) استفاده می‌کند. انتخاب API در SQLite روی Volume ذخیره می‌شود و بعد از restart یا deploy باقی می‌ماند.
 
 نظرسنجی و quiz زمان‌بندی‌شده و دستی به‌صورت poll بومی تلگرام و با مهلت ۱۵ دقیقه‌ای ارسال می‌شوند. برای جلوگیری از شلوغی، هر نوع poll در گروه حداکثر هر ۱۲۰ ثانیه و `/weekly` دستی حداکثر هر ساعت قابل اجراست. سؤال‌ها از طریق API فعال ساخته می‌شوند؛ اگر API موقتاً در دسترس نباشد، ربات از سؤال پیش‌فرض استفاده می‌کند. موعدهای هفتگی در SQLite روی Volume باقی می‌مانند.
 
-اگر CoArena یا XingChi خطای موقت شبکه یا 5xx بدهد، درخواست حداکثر سه بار با مکث افزایشی و محدود دوباره ارسال می‌شود. خطاهای دائمی مثل کلید نامعتبر بیهوده تکرار نمی‌شوند.
+اگر CoArena یا APmix خطای موقت شبکه یا 5xx بدهد، درخواست حداکثر سه بار با مکث افزایشی و محدود دوباره ارسال می‌شود. خطاهای دائمی مثل کلید نامعتبر بیهوده تکرار نمی‌شوند.
 
 لحن از طریق `BOT_TONE` انتخاب می‌شود: `friendly` برای لحن گرم و کمی صمیمی یا `serious` برای لحن جدی‌تر. مقدار پیش‌فرض `friendly` است. در هر دو حالت ربات از ایموجی و استیکر استفاده نمی‌کند.
 
 برای اینکه ربات سازنده را با احترام متعادل بشناسد، شناسهٔ عددی Telegram را با نام `CREATOR_TELEGRAM_ID` در Railway Variables قرار بده. این مقدار را فقط در تنظیمات خصوصی Railway وارد کن، نه در کد یا GitHub؛ ربات عدد را به مدل یا لاگ نمی‌فرستد. فقط وقتی پیام واقعاً از همان Telegram user ID باشد، prompt پاسخ لحن محترمانهٔ ویژه می‌گیرد؛ از تملق یا افشای شناسه جلوگیری شده است. سوییچ API فقط در پیوی و فقط برای شناسهٔ `API_OWNER_TELEGRAM_ID` مجاز است.
 
-مدل پیش‌فرض CoArena برابر `deepseek-v4-1-flash-1017` و مدل پیش‌فرض XingChi برابر `gpt-6-astra` است. در صورت نیاز شناسه را با `XINGCHI_MODEL` تغییر بده. XingChi برای مدل‌های GPT از مسیر OpenAI Chat Completions و برای مدل‌های Claude از Anthropic Messages API استفاده می‌کند. برای Astra پارامتر `temperature` فرستاده نمی‌شود. با `LLM_PROVIDER` API آغازین را انتخاب کن؛ مالک بعد از راه‌اندازی می‌تواند API فعال را از پیوی با `/setapi` عوض کند. برای پرسش‌های مربوط به خبر، آپدیت، تاریخ انتشار یا قیمت تازه، جست‌وجوی وب فعال می‌شود؛ نتیجهٔ RSS تا ۵ دقیقه cache می‌شود و با `NEWS_CACHE_TTL_SECONDS` قابل تنظیم است. برای جست‌وجوی RSS کلید دیگری لازم نیست.
+مدل پیش‌فرض CoArena برابر `deepseek-v4-1-flash-1017` و مدل پیش‌فرض APmix برابر `gpt-6-astra` است. APmix از endpoint سازگار با OpenAI استفاده می‌کند؛ برای Astra پارامتر `temperature` فرستاده نمی‌شود. با `LLM_PROVIDER` API آغازین را انتخاب کن؛ مالک بعد از راه‌اندازی می‌تواند API فعال را از پیوی با `/setapi` عوض کند. برای پرسش‌های مربوط به خبر، آپدیت، تاریخ انتشار یا قیمت تازه، جست‌وجوی وب فعال می‌شود؛ نتیجهٔ RSS تا ۵ دقیقه cache می‌شود و با `NEWS_CACHE_TTL_SECONDS` قابل تنظیم است. برای جست‌وجوی RSS کلید دیگری لازم نیست.
 
 ## تنظیم APIهای مدل
 
-برای CoArena در [صفحهٔ API CoArena](https://coarena.ai/account/api) و برای XingChi در [صفحهٔ کلیدهای XingChi](https://xingchiapi.com/keys) کلید بساز. کلیدها را فقط در Railway Variables با نام‌های `COARENA_API_KEY` و `XINGCHI_API_KEY` به‌صورت محرمانه تنظیم کن؛ دست‌کم یکی از این دو لازم است. هیچ‌کدام را در کد، چت یا repository نگذار.
+برای CoArena در [صفحهٔ API CoArena](https://coarena.ai/account/api) و برای APmix در [داشبورد APmix](https://apmix.ai/dashboard) یک API key بساز. طبق [مستندات رسمی APmix](https://apmix.ai/docs)، OpenAI-compatible base URL برابر `https://api.apmix.ai/v1` است و مدل `gpt-6-astra` در کاتالوگ آمده است. کلیدها را فقط در Railway Variables با نام‌های `COARENA_API_KEY` و `APMIX_API_KEY` به‌صورت محرمانه تنظیم کن؛ دست‌کم یکی از این دو لازم است. هیچ‌کدام را در کد، چت یا repository نگذار.
 
-endpoint پیش‌فرض CoArena برابر `https://coarena.ai/api/v1` و ریشهٔ XingChi برابر `https://api.xingchiapi.com` است. کد برای مدل `gpt-6-astra` مسیر `/v1/chat/completions` را به‌کار می‌برد؛ برای مدل‌های Claude از `/v1/messages` استفاده می‌کند. مدل‌ها با `COARENA_MODEL` و `XINGCHI_MODEL` تنظیم می‌شوند و provider آغازین با `LLM_PROVIDER=coarena` یا `LLM_PROVIDER=xingchi` انتخاب می‌شود. مدل پیش‌فرض XingChi روی `gpt-6-astra` است؛ اگر خواستی مدل دیگری انتخاب کنی، شناسهٔ دقیق آن را در `XINGCHI_MODEL` بگذار. XingChi یک gateway ثالث است، نه API رسمی OpenAI یا Anthropic؛ درخواست‌های بات برای پردازش به ارائه‌دهندهٔ مدل انتخابی ارسال می‌شوند.
+endpoint پیش‌فرض CoArena برابر `https://coarena.ai/api/v1` و base URL سازگار با OpenAI در APmix برابر `https://api.apmix.ai/v1` است؛ بات مسیر `/chat/completions` و هدر `Authorization: Bearer ...` را استفاده می‌کند. مدل‌ها با `COARENA_MODEL` و `APMIX_MODEL` تنظیم می‌شوند. مقدار پیش‌فرض APmix `gpt-6-astra` است و provider آغازین با `LLM_PROVIDER=coarena` یا `LLM_PROVIDER=apmix` انتخاب می‌شود. `/apmixmodels` از همان کلید `GET /v1/models` می‌زند تا مدل‌های مجاز آن حساب را بررسی کند. APmix سرویس واسط ثالث است؛ درخواست‌های بات برای پردازش به APmix و مدل انتخاب‌شده ارسال می‌شوند.
 
 ## استقرار و نگهداری state در Railway
 
@@ -58,11 +58,11 @@ Railway طبق [راهنمای Volumeها](https://docs.railway.com/volumes) ف�
 ```text
 TELEGRAM_BOT_TOKEN=توکن BotFather
 COARENA_API_KEY=کلید API
-XINGCHI_API_KEY=کلید API اختیاری برای provider دوم
+APMIX_API_KEY=کلید API اختیاری برای provider دوم
 COARENA_BASE_URL=https://coarena.ai/api/v1
 COARENA_MODEL=deepseek-v4-1-flash-1017
-XINGCHI_BASE_URL=https://api.xingchiapi.com
-XINGCHI_MODEL=gpt-6-astra
+APMIX_BASE_URL=https://api.apmix.ai/v1
+APMIX_MODEL=gpt-6-astra
 LLM_PROVIDER=coarena
 BOT_TONE=friendly
 CREATOR_TELEGRAM_ID=<numeric_telegram_user_id>
@@ -89,7 +89,7 @@ NEWS_SEARCH_MAX_RESULTS=4
 NEWS_CACHE_TTL_SECONDS=300
 ```
 
-`TARGET_CHAT_ID` اختیاری است و برای گروه خصوصی یا گروهی که username آن قابل تشخیص نیست استفاده می‌شود. اگر متغیرهای قدیمی `RADOXAI_API_KEY`, `RADOXAI_BASE_URL` یا `RADOXAI_MODEL` در Railway مانده‌اند، آن‌ها را حذف و به‌جایش متغیرهای `XINGCHI_*` را تنظیم کن. متغیرهای قدیمی `FREEMODEL_*` را نیز حذف کن.
+`TARGET_CHAT_ID` اختیاری است و برای گروه خصوصی یا گروهی که username آن قابل تشخیص نیست استفاده می‌شود. متغیرهای قدیمی `XINGCHI_*`, `RADOXAI_*` و `FREEMODEL_*` را از Railway حذف کن و به‌جایش `APMIX_API_KEY`, `APMIX_BASE_URL` و `APMIX_MODEL` را تنظیم کن. اگر انتخاب قبلی `xingchi` در SQLite ذخیره شده باشد، startup آن را به `apmix` تبدیل می‌کند؛ برای این کار باید `APMIX_API_KEY` تنظیم شده باشد.
 
 ## آماده‌سازی تلگرام
 
@@ -107,11 +107,12 @@ python bot.py
 
 در SQLite روی Volume فقط متن ۱۲ پیام متنی اخیر گروه برای context ذخیره می‌شود و پس از ۳۰ روز منقضی و پاکسازی می‌شود. علاوه بر آن، حداکثر ۵ ترجیح گیمی صریح برای هر عضو تا ۳۰ روز نگه‌داری می‌شود. برای جلوگیری از تکرار، حداکثر ۱۰۰ متن سؤال کویز اخیر هر گروه نیز روی Volume نگه داشته می‌شود؛ ۳۰ سؤال آخر به مدل داده می‌شود تا سؤال یا واقعیت تکراری نسازد. ربات ترجیحات را از پیام‌هایی که به‌وضوح دربارهٔ علاقه‌مندی به بازی/کنسول‌اند تشخیص می‌دهد؛ برای ثبت دستی از `/rememberme` استفاده کن. هر عضو می‌تواند با `/forgetme` ردیف‌های منتسب به شناسهٔ خودش را پاک کند. این داده‌ها فقط در پاسخ‌های مرتبط به مدل فرستاده می‌شوند؛ context گفتگو فقط برای پاسخ مستقیم به منشن/ریپلای استفاده می‌شود. شناسهٔ سازنده در SQLite یا prompt ذخیره نمی‌شود. `CONVERSATION_TTL_MINUTES` فقط TTL کش موقت RAM است؛ retention پایدار با `CONVERSATION_HISTORY_TTL_DAYS` تنظیم می‌شود.
 
-اگر ربات پیام‌های گروه را نمی‌بیند، Privacy Mode و `TARGET_CHAT_USERNAME` یا `TARGET_CHAT_ID` را بررسی کن. برای خطای مدل، Railway Logs، کلید API provider فعال و وجود شناسهٔ مدل را بررسی کن؛ کلید را در log یا پیام نفرست. مالک می‌تواند در پیوی `/xmodels` را برای بررسی فهرست مدل‌ها و `/xtest` را برای آزمودن یک تولید واقعی و دیدن جزئیات خطا اجرا کند. برای خطای 402 یا 429، سهمیه، balance و محدودیت همان provider را بررسی کن. اگر یک Bot Token را استفاده می‌کنی، فقط یک worker polling را هم‌زمان اجرا کن.
+اگر ربات پیام‌های گروه را نمی‌بیند، Privacy Mode و `TARGET_CHAT_USERNAME` یا `TARGET_CHAT_ID` را بررسی کن. برای خطای مدل، Railway Logs، کلید API provider فعال و وجود شناسهٔ مدل را بررسی کن؛ کلید را در log یا پیام نفرست. مالک می‌تواند در پیوی `/apmixmodels` را برای بررسی فهرست مدل‌های قابل‌دسترسی و `/apmixtest` را برای آزمودن یک تولید واقعی و دیدن جزئیات خطا اجرا کند. برای خطاهای 402 یا 429، سهمیه و محدودیت همان provider را بررسی کن؛ APmix در صورت خطا شناسهٔ درخواست هم می‌دهد که می‌توان به پشتیبانی ارائه کرد. اگر یک Bot Token را استفاده می‌کنی، فقط یک worker polling را هم‌زمان اجرا کن.
 
 ## منابع فنی
 
 - [Telegram Bot API — sendPoll](https://core.telegram.org/bots/api/methods/sendpoll.md)
 - [python-telegram-bot changelog](https://docs.python-telegram-bot.org/en/stable/changelog.html) — نسخهٔ 22.8 برای `correct_option_ids` در quiz
 - [Railway Volumes](https://docs.railway.com/volumes)
+- [APmix API documentation](https://apmix.ai/docs)
 - [PlayStation Blog](https://blog.playstation.com/)، [Xbox Wire](https://news.xbox.com/en-us/) و [Nintendo News](https://www.nintendo.com/us/whatsnew/)
