@@ -31,13 +31,13 @@
 
 برای اینکه ربات سازنده را با احترام متعادل بشناسد، شناسهٔ عددی Telegram را با نام `CREATOR_TELEGRAM_ID` در Railway Variables قرار بده. این مقدار را فقط در تنظیمات خصوصی Railway وارد کن، نه در کد یا GitHub؛ ربات عدد را به مدل یا لاگ نمی‌فرستد. فقط وقتی پیام واقعاً از همان Telegram user ID باشد، prompt پاسخ لحن محترمانهٔ ویژه می‌گیرد؛ از تملق یا افشای شناسه جلوگیری شده است. سوییچ API فقط در پیوی و فقط برای شناسهٔ `API_OWNER_TELEGRAM_ID` مجاز است.
 
-مدل پیش‌فرض CoArena برابر `deepseek-v4-1-flash-1017` است. مدل پیش‌فرض XingChi برابر `claude-sonnet-5` تنظیم شده تا انتخاب قبلی حفظ شود؛ اگر شناسهٔ دقیق این مدل در فهرست حساب XingChi متفاوت است، مقدار `XINGCHI_MODEL` را به همان شناسه تغییر بده. درخواست XingChi از مسیر Anthropic Messages API یعنی `/v1/messages` فرستاده می‌شود. با `LLM_PROVIDER` API آغازین را انتخاب کن؛ مالک بعد از راه‌اندازی می‌تواند API فعال را از پیوی با `/setapi` عوض کند. برای پرسش‌های مربوط به خبر، آپدیت، تاریخ انتشار یا قیمت تازه، جست‌وجوی وب فعال می‌شود؛ نتیجهٔ RSS تا ۵ دقیقه cache می‌شود و با `NEWS_CACHE_TTL_SECONDS` قابل تنظیم است. برای جست‌وجوی RSS کلید دیگری لازم نیست.
+مدل پیش‌فرض CoArena برابر `deepseek-v4-1-flash-1017` و مدل پیش‌فرض XingChi برابر `gpt-6-astra` است. در صورت نیاز شناسه را با `XINGCHI_MODEL` تغییر بده. درخواست XingChi از مسیر Anthropic Messages API یعنی `/v1/messages` فرستاده می‌شود. با `LLM_PROVIDER` API آغازین را انتخاب کن؛ مالک بعد از راه‌اندازی می‌تواند API فعال را از پیوی با `/setapi` عوض کند. برای پرسش‌های مربوط به خبر، آپدیت، تاریخ انتشار یا قیمت تازه، جست‌وجوی وب فعال می‌شود؛ نتیجهٔ RSS تا ۵ دقیقه cache می‌شود و با `NEWS_CACHE_TTL_SECONDS` قابل تنظیم است. برای جست‌وجوی RSS کلید دیگری لازم نیست.
 
 ## تنظیم APIهای مدل
 
 برای CoArena در [صفحهٔ API CoArena](https://coarena.ai/account/api) و برای XingChi در [صفحهٔ کلیدهای XingChi](https://xingchiapi.com/keys) کلید بساز. کلیدها را فقط در Railway Variables با نام‌های `COARENA_API_KEY` و `XINGCHI_API_KEY` به‌صورت محرمانه تنظیم کن؛ دست‌کم یکی از این دو لازم است. هیچ‌کدام را در کد، چت یا repository نگذار.
 
-endpoint پیش‌فرض CoArena برابر `https://coarena.ai/api/v1` است. XingChi به‌صورت پیش‌فرض از `https://api.xingchiapi.com/v1/messages` استفاده می‌کند؛ ریشهٔ سرویس را با `XINGCHI_BASE_URL` می‌توان تغییر داد. CoArena از مسیر Chat Completions و XingChi از قالب Anthropic Messages API استفاده می‌کند. مدل‌ها با `COARENA_MODEL` و `XINGCHI_MODEL` تنظیم می‌شوند و provider آغازین با `LLM_PROVIDER=coarena` یا `LLM_PROVIDER=xingchi` انتخاب می‌شود. شناسهٔ دقیق مدل را از صفحهٔ حساب/مدل‌های XingChi بردار و در `XINGCHI_MODEL` بگذار. XingChi یک gateway ثالث است، نه API رسمی OpenAI یا Anthropic؛ درخواست‌های بات برای پردازش به ارائه‌دهندهٔ مدل انتخابی ارسال می‌شوند.
+endpoint پیش‌فرض CoArena برابر `https://coarena.ai/api/v1` است. XingChi به‌صورت پیش‌فرض از `https://api.xingchiapi.com/v1/messages` استفاده می‌کند؛ ریشهٔ سرویس را با `XINGCHI_BASE_URL` می‌توان تغییر داد. CoArena از مسیر Chat Completions و XingChi از قالب Anthropic Messages API استفاده می‌کند. مدل‌ها با `COARENA_MODEL` و `XINGCHI_MODEL` تنظیم می‌شوند و provider آغازین با `LLM_PROVIDER=coarena` یا `LLM_PROVIDER=xingchi` انتخاب می‌شود. مدل پیش‌فرض XingChi روی `gpt-6-astra` است؛ اگر خواستی مدل دیگری انتخاب کنی، شناسهٔ دقیق آن را در `XINGCHI_MODEL` بگذار. XingChi یک gateway ثالث است، نه API رسمی OpenAI یا Anthropic؛ درخواست‌های بات برای پردازش به ارائه‌دهندهٔ مدل انتخابی ارسال می‌شوند.
 
 ## استقرار و نگهداری state در Railway
 
@@ -62,7 +62,7 @@ XINGCHI_API_KEY=کلید API اختیاری برای provider دوم
 COARENA_BASE_URL=https://coarena.ai/api/v1
 COARENA_MODEL=deepseek-v4-1-flash-1017
 XINGCHI_BASE_URL=https://api.xingchiapi.com
-XINGCHI_MODEL=claude-sonnet-5
+XINGCHI_MODEL=gpt-6-astra
 LLM_PROVIDER=coarena
 BOT_TONE=friendly
 CREATOR_TELEGRAM_ID=<numeric_telegram_user_id>
