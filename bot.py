@@ -851,7 +851,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "برای ثبت سلیقهٔ گیمی خودت /rememberme و برای پاک‌کردن حافظهٔ خودت /forgetme را بزن."
         )
         if user and user.id == API_OWNER_TELEGRAM_ID:
-            text += "\n\nمدیریت API: /apis برای دیدن وضعیت APIها، /setapi coarena یا /setapi xingchi برای سوییچ API."
+            text += "\n\nمدیریت API: /apis برای دیدن وضعیت، /xmodels برای بررسی دسترسی مدل‌های XingChi، "
+            text += "و /setapi coarena یا /setapi xingchi برای سوییچ API."
         await update.effective_message.reply_text(text)
 
 
@@ -903,6 +904,66 @@ async def apis_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         status = "آمادهٔ انتخاب" if provider_config(provider)["api_key"] else "کلید API تنظیم نشده"
         lines.append(f"- {provider}: {status}؛ مدل پیکربندی‌شده: {model}")
     await message.reply_text("\n".join(lines))
+
+
+async def xingchi_models_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+    if not message or not chat:
+        return
+    if chat.type != ChatType.PRIVATE or not user or user.id != API_OWNER_TELEGRAM_ID:
+        await message.reply_text("برای امنیت، این بررسی فقط در پیوی و برای مالک ربات فعال است.")
+        return
+    config = provider_config("xingchi")
+    if not config["api_key"]:
+        await message.reply_text("XINGCHI_API_KEY در Railway تنظیم نشده است.")
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=8.0)) as client:
+            response = await client.get(
+                f"{config['base_url']}/v1/models",
+                headers={"Authorization": f"Bearer {config['api_key']}"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except httpx.HTTPStatusError as exc:
+        log.error("XingChi model-list request returned HTTP %s", exc.response.status_code)
+        await message.reply_text(
+            f"XingChi فهرست مدل‌ها را با خطای HTTP {exc.response.status_code} رد کرد. "
+            "اگر 401 یا 403 است، کلید یا دسترسی حساب را در داشبورد XingChi بررسی کن."
+        )
+        return
+    except httpx.HTTPError as exc:
+        log.warning("XingChi model-list request failed: %s", exc.__class__.__name__)
+        await message.reply_text("به endpoint فهرست مدل‌های XingChi وصل نشدم؛ کمی بعد دوباره امتحان کن.")
+        return
+    except (ValueError, TypeError):
+        await message.reply_text("پاسخ فهرست مدل‌های XingChi قابل‌خواندن نبود.")
+        return
+
+    if not isinstance(payload, dict):
+        await message.reply_text("پاسخ فهرست مدل‌های XingChi قالب موردانتظار را نداشت.")
+        return
+    items = payload.get("data") or payload.get("models") or []
+    model_ids = [
+        str(item.get("id", "")).strip() if isinstance(item, dict) else str(item).strip()
+        for item in items
+    ]
+    model_ids = [model_id for model_id in model_ids if model_id]
+    if not model_ids:
+        await message.reply_text("کلید پاسخ داد، اما فهرست مدل خالی بود یا قالب آن شناخته‌شده نبود.")
+        return
+
+    target_available = any(model_id.casefold() == "gpt-6-astra" for model_id in model_ids)
+    astra_models = [model_id for model_id in model_ids if "astra" in model_id.casefold()]
+    result = "در فهرست کلید XingChi هست." if target_available else "در فهرست کلید XingChi دیده نشد."
+    details = ", ".join(astra_models[:10]) if astra_models else "مدل Astra دیگری هم برنگشت."
+    await message.reply_text(
+        f"بررسی کلید XingChi کامل شد.\nGPT-6 Astra (`gpt-6-astra`): {result}\n"
+        f"مدل‌های شامل Astra: {details}"
+    )
 
 
 async def setapi_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1223,7 +1284,20 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception:
                 log.exception("Could not persist reply timestamp")
     except httpx.HTTPStatusError as exc:
-        log.error("%s API returned HTTP %s", provider, exc.response.status_code)
+        try:
+            error_payload = exc.response.json()
+        except ValueError:
+            error_payload = {}
+        error_object = error_payload.get("error", {}) if isinstance(error_payload, dict) else {}
+        error_object = error_object if isinstance(error_object, dict) else {}
+        error_code = error_payload.get("code", "") if isinstance(error_payload, dict) else ""
+        error_type = error_object.get("type", "") or error_object.get("code", "")
+        safe_code = re.sub(r"[^A-Za-z0-9_.-]", "", str(error_code))[:80]
+        safe_type = re.sub(r"[^A-Za-z0-9_.-]", "", str(error_type))[:80]
+        log.error(
+            "%s API returned HTTP %s for model %s (provider_error_code=%s, provider_error_type=%s)",
+            provider, exc.response.status_code, model, safe_code or "none", safe_type or "none",
+        )
         if direct:
             if exc.response.status_code == 402:
                 notice = (
@@ -1689,6 +1763,7 @@ async def post_init(application: Application) -> None:
             BotCommand("start", "معرفی ربات"),
             BotCommand("status", "وضعیت و قابلیت‌های ربات"),
             BotCommand("apis", "وضعیت APIها؛ فقط مالک در پیوی"),
+            BotCommand("xmodels", "بررسی فهرست مدل XingChi؛ فقط مالک در پیوی"),
             BotCommand("setapi", "سوییچ API؛ فقط مالک در پیوی"),
             BotCommand("poll", "ساخت نظرسنجی گیمی"),
             BotCommand("quiz", "ساخت کوییز گیمی"),
@@ -1736,6 +1811,7 @@ def main() -> None:
     application.add_handler(CommandHandler("id", id_command), group=0)
     application.add_handler(CommandHandler("status", status_command), group=0)
     application.add_handler(CommandHandler("apis", apis_command), group=0)
+    application.add_handler(CommandHandler("xmodels", xingchi_models_command), group=0)
     application.add_handler(CommandHandler("setapi", setapi_command), group=0)
     application.add_handler(CommandHandler("poll", poll_command), group=0)
     application.add_handler(CommandHandler("quiz", quiz_command), group=0)
