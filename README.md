@@ -31,7 +31,7 @@
 
 برای اینکه ربات سازنده را با احترام متعادل بشناسد، شناسهٔ عددی Telegram را با نام `CREATOR_TELEGRAM_ID` در Railway Variables قرار بده. این مقدار را فقط در تنظیمات خصوصی Railway وارد کن، نه در کد یا GitHub؛ ربات عدد را به مدل یا لاگ نمی‌فرستد. فقط وقتی پیام واقعاً از همان Telegram user ID باشد، prompt پاسخ لحن محترمانهٔ ویژه می‌گیرد؛ از تملق یا افشای شناسه جلوگیری شده است. سوییچ API فقط در پیوی و فقط برای شناسهٔ `API_OWNER_TELEGRAM_ID` مجاز است.
 
-مدل پیش‌فرض CoArena برابر `deepseek-v4-1-flash-1017` و مدل پیش‌فرض RadoxAI برابر `deepseek-v4-flash-0731` است؛ هرکدام با متغیر محیطی خودش قابل تنظیم است. با `LLM_PROVIDER` API آغازین را انتخاب کن؛ مالک بعد از راه‌اندازی می‌تواند فقط API فعال را از پیوی با `/setapi` عوض کند. برای پرسش‌های مربوط به خبر، آپدیت، تاریخ انتشار یا قیمت تازه، جست‌وجوی وب فعال می‌شود؛ نتیجهٔ RSS تا ۵ دقیقه cache می‌شود و با `NEWS_CACHE_TTL_SECONDS` قابل تنظیم است. برای جست‌وجوی RSS کلید دیگری لازم نیست.
+مدل پیش‌فرض CoArena برابر `deepseek-v4-1-flash-1017` و مدل پیش‌فرض RadoxAI برابر `claude-sonnet-5` است؛ هرکدام با متغیر محیطی خودش قابل تنظیم است. با `LLM_PROVIDER` API آغازین را انتخاب کن؛ مالک بعد از راه‌اندازی می‌تواند فقط API فعال را از پیوی با `/setapi` عوض کند. برای پرسش‌های مربوط به خبر، آپدیت، تاریخ انتشار یا قیمت تازه، جست‌وجوی وب فعال می‌شود؛ نتیجهٔ RSS تا ۵ دقیقه cache می‌شود و با `NEWS_CACHE_TTL_SECONDS` قابل تنظیم است. برای جست‌وجوی RSS کلید دیگری لازم نیست.
 
 ## تنظیم APIهای مدل
 
@@ -62,7 +62,7 @@ RADOXAI_API_KEY=کلید API اختیاری برای provider دوم
 COARENA_BASE_URL=https://coarena.ai/api/v1
 COARENA_MODEL=deepseek-v4-1-flash-1017
 RADOXAI_BASE_URL=https://radoxai.com/v1
-RADOXAI_MODEL=deepseek-v4-flash-0731
+RADOXAI_MODEL=claude-sonnet-5
 LLM_PROVIDER=coarena
 BOT_TONE=friendly
 CREATOR_TELEGRAM_ID=<numeric_telegram_user_id>
