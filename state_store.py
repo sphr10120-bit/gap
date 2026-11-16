@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any
+
+
+def normalize_quiz_question(question: str) -> str:
+    text = unicodedata.normalize("NFKC", (question or "").strip()).casefold()
+    text = text.translate(str.maketrans({"ي": "ی", "ى": "ی", "ك": "ک", "ۀ": "ه"}))
+    return re.sub(r"[^\w]+", "", text, flags=re.UNICODE)
 
 
 class ConversationMemory:
@@ -132,6 +140,15 @@ class StateStore:
                     next_due_at REAL NOT NULL,
                     PRIMARY KEY (chat_id, kind)
                 );
+                CREATE TABLE IF NOT EXISTS quiz_question_history (
+                    chat_id INTEGER NOT NULL,
+                    question_key TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (chat_id, question_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_quiz_history_chat_time
+                    ON quiz_question_history(chat_id, created_at DESC);
                 CREATE TABLE IF NOT EXISTS conversation_messages (
                     chat_id INTEGER NOT NULL,
                     message_id INTEGER NOT NULL,
@@ -239,6 +256,52 @@ class StateStore:
             (chat_id, max(1, min(limit, 12))),
         ).fetchall()
         return [row["topic"] for row in reversed(rows)]
+
+    def record_quiz_question(
+        self,
+        chat_id: int,
+        question: str,
+        *,
+        at: float | None = None,
+        max_items: int = 100,
+    ) -> None:
+        cleaned = (question or "").strip()[:300]
+        question_key = normalize_quiz_question(cleaned)
+        if not question_key:
+            return
+        timestamp = time.time() if at is None else at
+        keep = max(1, int(max_items))
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO quiz_question_history(chat_id, question_key, question, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(chat_id, question_key) DO UPDATE SET
+                    question = excluded.question,
+                    created_at = excluded.created_at
+                """,
+                (chat_id, question_key, cleaned, timestamp),
+            )
+            self.connection.execute(
+                """
+                DELETE FROM quiz_question_history
+                WHERE chat_id = ? AND question_key NOT IN (
+                    SELECT question_key FROM quiz_question_history
+                    WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?
+                )
+                """,
+                (chat_id, chat_id, keep),
+            )
+
+    def recent_quiz_questions(self, chat_id: int, *, limit: int = 30) -> list[str]:
+        rows = self.connection.execute(
+            """
+            SELECT question FROM quiz_question_history
+            WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?
+            """,
+            (chat_id, max(1, min(limit, 100))),
+        ).fetchall()
+        return [str(row["question"]) for row in reversed(rows)]
 
     def record_conversation_message(
         self,

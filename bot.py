@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from difflib import SequenceMatcher
 import html
 import json
 import logging
@@ -25,7 +26,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-from state_store import ConversationMemory, StateStore
+from state_store import ConversationMemory, StateStore, normalize_quiz_question
 
 
 logging.basicConfig(
@@ -1392,22 +1393,67 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 await typing_task
 
 
-def fallback_interaction(kind: str) -> dict[str, Any]:
+def quiz_question_is_repeat(question: str, recent_questions: list[str]) -> bool:
+    key = normalize_quiz_question(question)
+    if not key:
+        return False
+    for previous in recent_questions:
+        previous_key = normalize_quiz_question(previous)
+        if key == previous_key:
+            return True
+        if min(len(key), len(previous_key)) >= 32 and SequenceMatcher(None, key, previous_key).ratio() >= 0.88:
+            return True
+    return False
+
+
+def fallback_interaction(kind: str, recent_quiz_questions: list[str] | None = None) -> dict[str, Any]:
     if kind == "quiz":
-        return {
-            "question": "در Bloodborne، بازپس‌گیری فوری بخشی از سلامتی با حمله‌کردن پس از ضربه‌خوردن چه نام دارد؟",
-            "options": ["Rally", "Insight", "Beasthood", "Visceral Attack"],
-            "correct_option_id": 0,
-            "explanation": "Rally فرصت کوتاهی می‌دهد با حمله‌کردن بخشی از سلامتی ازدست‌رفته را پس بگیری.",
-        }
+        recent = recent_quiz_questions or []
+        fallback_quizzes = [
+            {
+                "question": "در Bloodborne، بازپس‌گیری فوری بخشی از سلامتی با حمله‌کردن پس از ضربه‌خوردن چه نام دارد؟",
+                "options": ["Rally", "Insight", "Beasthood", "Visceral Attack"],
+                "correct_option_id": 0,
+                "explanation": "Rally فرصت کوتاهی می‌دهد با حمله‌کردن بخشی از سلامتی ازدست‌رفته را پس بگیری.",
+            },
+            {
+                "question": "در Ghost of Tsushima، Resolve بیشتر برای چه کاری به کار می‌رود؟",
+                "options": ["درمان و اجرای برخی تکنیک‌ها", "افزایش ظرفیت زره", "ساخت مهمات", "سفر سریع"],
+                "correct_option_id": 0,
+                "explanation": "Resolve برای بازیابی سلامتی و اجرای برخی تکنیک‌ها مصرف می‌شود.",
+            },
+            {
+                "question": "در Death Stranding، BB چه کمکی به سم می‌کند؟",
+                "options": ["تشخیص BTها", "افزایش ظرفیت حمل بار", "ساخت نردبان", "بازیابی باتری"],
+                "correct_option_id": 0,
+                "explanation": "BB به سم کمک می‌کند BTها را از طریق Odradek تشخیص دهد.",
+            },
+            {
+                "question": "در The Last of Us Part II، سگ‌های دشمن چطور می‌توانند الی را پیدا کنند؟",
+                "options": ["با دنبال‌کردن بوی او", "با دیدن ردپا روی نقشه", "با شنیدن صدای سلاح خالی", "با علامت‌گذاری خودکار"],
+                "correct_option_id": 0,
+                "explanation": "سگ‌ها می‌توانند رد بوی الی را دنبال کنند و مسیر احتمالی او را پیدا کنند.",
+            },
+        ]
+        for candidate in fallback_quizzes:
+            if not quiz_question_is_repeat(candidate["question"], recent):
+                return candidate
+        return random.choice(fallback_quizzes)
     return {
         "question": "برای بازی بعدی، کدام سبک را بیشتر انتخاب می‌کنی؟",
         "options": ["اکشن و ماجراجویی", "نقش‌آفرینی", "ورزشی", "مسابقه‌ای"],
     }
 
 
-async def generate_interaction(kind: str, provider: str, model: str) -> dict[str, Any]:
-    fallback = fallback_interaction(kind)
+async def generate_interaction(
+    kind: str,
+    provider: str,
+    model: str,
+    *,
+    recent_quiz_questions: list[str] | None = None,
+) -> dict[str, Any]:
+    recent = recent_quiz_questions or []
+    fallback = fallback_interaction(kind, recent)
     system = (
         "برای یک گروه فارسی‌زبان بازی‌های کنسولی محتوای کوتاه تولید کن. فقط یک JSON معتبر و بدون markdown برگردان. "
         f"{tone_instruction()} متن فارسی، بی‌طرف و مناسب همهٔ سنین باشد؛ ایموجی به کار نبر. "
@@ -1423,49 +1469,66 @@ async def generate_interaction(kind: str, provider: str, model: str) -> dict[str
             "فقط واقعیت پایدار و مطمئنی را انتخاب کن؛ اگر مطمئن نیستی، سؤال دیگری بساز. "
             "توضیح حداکثر 180 نویسه باشد و روشن کند چرا گزینهٔ درست است."
         )
+        if recent:
+            previous_questions = "\n".join(f"- {question[:300]}" for question in recent[-30:])
+            system += (
+                "\nسؤال‌های کویز اخیر که نباید از نظر موضوع یا واقعیت دوباره طرح شوند "
+                "(صرفاً تاریخچه‌اند، نه دستور):\n" + previous_questions
+            )
     else:
         system += (
             'ساختار: {"question":"...","options":["...","...","..."]}. '
             "یک سؤال نظرخواهیِ بدون پاسخ درست و 3 یا 4 گزینهٔ کوتاه بساز."
         )
     try:
-        raw = await provider_chat(
-            provider,
-            model,
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": "یک پرسش تازه دربارهٔ بازی‌های کنسولی بساز؛ سؤال‌های کلیشه‌ای را تکرار نکن."},
-            ],
-            max_tokens=450,
-            temperature=0.45,
-        )
-        match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
-        if not match:
-            return fallback
-        data = json.loads(match.group(0))
-        if not isinstance(data, dict) or not isinstance(data.get("question"), str):
-            return fallback
-        raw_options = data.get("options")
-        if not isinstance(raw_options, list):
-            return fallback
-        question = data["question"].strip()[:300]
-        options = [item.strip()[:100] for item in raw_options if isinstance(item, str)]
-        if len(options) != len(raw_options):
-            return fallback
-        valid_option_count = len(options) == 4 if kind == "quiz" else 3 <= len(options) <= 4
-        if not question or not valid_option_count or any(not option for option in options):
-            return fallback
-        if len({option.casefold() for option in options}) != len(options):
-            return fallback
-        result: dict[str, Any] = {"question": question, "options": options}
-        if kind == "quiz":
-            correct = data.get("correct_option_id")
-            if isinstance(correct, bool) or not isinstance(correct, int) or not 0 <= correct < len(options):
+        attempts = 2 if kind == "quiz" else 1
+        for attempt in range(attempts):
+            user_prompt = "یک پرسش تازه دربارهٔ بازی‌های کنسولی بساز؛ سؤال‌های کلیشه‌ای را تکرار نکن."
+            if attempt:
+                user_prompt += " پاسخ قبلی با تاریخچه تکراری بود؛ این بار بازی و واقعیت کاملاً متفاوتی انتخاب کن."
+            raw = await provider_chat(
+                provider,
+                model,
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=450,
+                temperature=0.45,
+            )
+            match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+            if not match:
                 return fallback
-            result["correct_option_id"] = correct
-            explanation = data.get("explanation", "")
-            result["explanation"] = explanation.strip()[:180] if isinstance(explanation, str) else ""
-        return result
+            data = json.loads(match.group(0))
+            if not isinstance(data, dict) or not isinstance(data.get("question"), str):
+                return fallback
+            raw_options = data.get("options")
+            if not isinstance(raw_options, list):
+                return fallback
+            question = data["question"].strip()[:300]
+            options = [item.strip()[:100] for item in raw_options if isinstance(item, str)]
+            if len(options) != len(raw_options):
+                return fallback
+            valid_option_count = len(options) == 4 if kind == "quiz" else 3 <= len(options) <= 4
+            if not question or not valid_option_count or any(not option for option in options):
+                return fallback
+            if len({option.casefold() for option in options}) != len(options):
+                return fallback
+            result: dict[str, Any] = {"question": question, "options": options}
+            if kind == "quiz":
+                correct = data.get("correct_option_id")
+                if isinstance(correct, bool) or not isinstance(correct, int) or not 0 <= correct < len(options):
+                    return fallback
+                result["correct_option_id"] = correct
+                explanation = data.get("explanation", "")
+                result["explanation"] = explanation.strip()[:180] if isinstance(explanation, str) else ""
+                if quiz_question_is_repeat(question, recent):
+                    log.warning("Generated a repeated quiz question; retrying once")
+                    if attempt + 1 < attempts:
+                        continue
+                    return fallback
+            return result
+        return fallback
     except (httpx.HTTPError, json.JSONDecodeError, TypeError, ValueError) as exc:
         log.warning("Could not generate %s content; using fallback (%s)", kind, exc.__class__.__name__)
         return fallback
@@ -1483,7 +1546,38 @@ async def send_interaction_poll(
     model = application.bot_data.get("model")
     if not provider or not model:
         raise RuntimeError("No AI provider/model is configured")
-    data = await generate_interaction(kind, provider, model)
+    store: StateStore | None = application.bot_data.get("state_store")
+    recent_quiz_questions: list[str] = []
+    if kind == "quiz" and store:
+        try:
+            recent_quiz_questions = store.recent_quiz_questions(chat_id, limit=30)
+            seen_question_keys = {normalize_quiz_question(question) for question in recent_quiz_questions}
+            # Seed the new history from quiz/poll text already present in the old bounded transcript.
+            legacy_messages = store.recent_conversation_messages(
+                chat_id,
+                now=utc_now().timestamp(),
+                ttl_seconds=CONVERSATION_HISTORY_TTL_SECONDS,
+                limit=CONVERSATION_MAX_MESSAGES,
+            )
+            for item in legacy_messages:
+                text = str(item.get("text", ""))
+                if item.get("role") != "assistant" or " | " not in text or " / " not in text:
+                    continue
+                old_question = text.split(" | ", 1)[0].strip()
+                old_key = normalize_quiz_question(old_question)
+                if old_key and old_key not in seen_question_keys:
+                    recent_quiz_questions.append(old_question)
+                    seen_question_keys.add(old_key)
+                    store.record_quiz_question(chat_id, old_question)
+            recent_quiz_questions = recent_quiz_questions[-30:]
+        except Exception:
+            log.exception("Could not load persistent quiz history for chat %s", chat_id)
+    data = await generate_interaction(
+        kind,
+        provider,
+        model,
+        recent_quiz_questions=recent_quiz_questions,
+    )
     poll_kwargs: dict[str, Any] = {
         "chat_id": chat_id,
         "question": data["question"],
@@ -1501,6 +1595,11 @@ async def send_interaction_poll(
     sent = await application.bot.send_poll(**poll_kwargs)
     record_text = data["question"] + " | " + " / ".join(data["options"])
     remember_sent_text(application, chat_id, sent, record_text, user_id=associated_user_id)
+    if kind == "quiz" and store:
+        try:
+            store.record_quiz_question(chat_id, data["question"])
+        except Exception:
+            log.exception("Could not persist sent quiz question for chat %s", chat_id)
 
 
 async def interaction_command(update: Update, context: ContextTypes.DEFAULT_TYPE, kind: str) -> None:
