@@ -155,7 +155,28 @@ class StateStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_user_profile_time
                     ON user_profile_memories(chat_id, user_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    setting_key TEXT PRIMARY KEY,
+                    setting_value TEXT NOT NULL
+                );
                 """
+            )
+
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        row = self.connection.execute(
+            "SELECT setting_value FROM app_settings WHERE setting_key = ?",
+            (key,),
+        ).fetchone()
+        return str(row["setting_value"]) if row is not None else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO app_settings(setting_key, setting_value) VALUES (?, ?)
+                ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value
+                """,
+                (str(key), str(value)),
             )
 
     def record_activity(self, chat_id: int, *, at: float | None = None) -> None:
