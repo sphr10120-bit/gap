@@ -54,8 +54,8 @@ if not BOT_DB_PATH:
 TARGET_CHAT_USERNAME = os.getenv("TARGET_CHAT_USERNAME", "Pixel_Mediair").strip().lstrip("@").lower()
 TARGET_CHAT_ID_RAW = os.getenv("TARGET_CHAT_ID", "").strip()
 CREATOR_TELEGRAM_ID_RAW = os.getenv("CREATOR_TELEGRAM_ID", "").strip()
-MODEL_OWNER_TELEGRAM_ID_RAW = os.getenv(
-    "MODEL_OWNER_TELEGRAM_ID", CREATOR_TELEGRAM_ID_RAW or "8524573838"
+API_OWNER_TELEGRAM_ID_RAW = os.getenv(
+    "API_OWNER_TELEGRAM_ID", CREATOR_TELEGRAM_ID_RAW or "8524573838"
 ).strip()
 IDLE_MINUTES = int(os.getenv("IDLE_MINUTES", "15"))
 TOPIC_COOLDOWN_MINUTES = int(os.getenv("TOPIC_COOLDOWN_MINUTES", "60"))
@@ -88,13 +88,13 @@ try:
 except ValueError as exc:
     raise RuntimeError("CREATOR_TELEGRAM_ID must be a numeric Telegram user ID.") from exc
 try:
-    MODEL_OWNER_TELEGRAM_ID = int(MODEL_OWNER_TELEGRAM_ID_RAW)
+    API_OWNER_TELEGRAM_ID = int(API_OWNER_TELEGRAM_ID_RAW)
 except ValueError as exc:
-    raise RuntimeError("MODEL_OWNER_TELEGRAM_ID must be a numeric Telegram user ID.") from exc
+    raise RuntimeError("API_OWNER_TELEGRAM_ID must be a numeric Telegram user ID.") from exc
 if CREATOR_TELEGRAM_ID is not None and CREATOR_TELEGRAM_ID <= 0:
     raise RuntimeError("CREATOR_TELEGRAM_ID must be a positive Telegram user ID.")
-if MODEL_OWNER_TELEGRAM_ID <= 0:
-    raise RuntimeError("MODEL_OWNER_TELEGRAM_ID must be a positive Telegram user ID.")
+if API_OWNER_TELEGRAM_ID <= 0:
+    raise RuntimeError("API_OWNER_TELEGRAM_ID must be a positive Telegram user ID.")
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("Missing required environment variable: TELEGRAM_BOT_TOKEN")
@@ -464,28 +464,6 @@ async def provider_chat(
     return str(content).strip()
 
 
-async def fetch_provider_models(provider: str) -> list[str]:
-    config = provider_config(provider)
-    if not config["api_key"]:
-        raise RuntimeError(f"The {provider} API key is not configured")
-    async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as client:
-        response = await client.get(
-            f"{config['base_url']}/models",
-            headers={"Authorization": f"Bearer {config['api_key']}"},
-        )
-        response.raise_for_status()
-        payload = response.json()
-    records = (payload.get("data") or payload.get("models") or []) if isinstance(payload, dict) else []
-    if not isinstance(records, list):
-        return []
-    model_ids = {
-        str(item.get("id", "")).strip()
-        for item in records
-        if isinstance(item, dict) and str(item.get("id", "")).strip()
-    }
-    return sorted(model_ids, key=str.casefold)
-
-
 def clean_news_query(query: str) -> str:
     text = re.sub(r"https?://\S+|@\w+", " ", query, flags=re.IGNORECASE)
     text = re.sub(r"\bgta\s*6\b|\bgta\s*vi\b|\bgta6\b", "GTA 6", text, flags=re.IGNORECASE)
@@ -789,8 +767,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "هر هفته هم یک نظرسنجی و یک quiz می‌گذارم. برای اجرای دستی در گروه از /poll، /quiz یا /weekly استفاده کن. "
             "برای ثبت سلیقهٔ گیمی خودت /rememberme و برای پاک‌کردن حافظهٔ خودت /forgetme را بزن."
         )
-        if user and user.id == MODEL_OWNER_TELEGRAM_ID:
-            text += "\n\nمدیریت مدل: /models برای فهرست مدل‌ها، /setmodel <coarena|radoxai> <model_id> برای تغییر مدل."
+        if user and user.id == API_OWNER_TELEGRAM_ID:
+            text += "\n\nمدیریت API: /apis برای دیدن وضعیت APIها، /setapi coarena یا /setapi radoxai برای سوییچ API."
         await update.effective_message.reply_text(text)
 
 
@@ -807,7 +785,6 @@ async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not matches_target_chat(update.effective_chat):
         return
-    model = context.application.bot_data.get("model", "در حال آماده‌سازی")
     provider = context.application.bot_data.get("provider", "نامشخص")
     tone_label = "جدی" if BOT_TONE == "serious" else "صمیمی"
     await update.effective_message.reply_text(
@@ -815,118 +792,77 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"بحث هفتگی هر {WEEKLY_TOPIC_INTERVAL_DAYS} روز؛ نظرسنجی و quiz هر {WEEKLY_INTERACTION_INTERVAL_DAYS} روز و با فاصلهٔ تقریبی {WEEKLY_INTERACTION_SPACING_HOURS} ساعت. "
         f"زمینهٔ گفتگو: حداکثر {CONVERSATION_MAX_MESSAGES} پیام اخیر، نگهداری روی Volume تا {CONVERSATION_HISTORY_TTL_DAYS} روز؛ "
         f"ترجیحات صریح هر کاربر تا {USER_MEMORY_TTL_DAYS} روز و قابل‌حذف با /forgetme. "
-        f"لحن: {tone_label}. مدل: {provider}/{model}. دستورها: /poll، /quiz، /weekly، /rememberme، /forgetme"
+        f"لحن: {tone_label}. API فعال: {provider}. دستورها: /poll، /quiz، /weekly، /rememberme، /forgetme"
     )
 
 
-async def models_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def apis_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
     if not message or not chat:
         return
     if chat.type != ChatType.PRIVATE:
-        await message.reply_text("برای امنیت، دیدن و تغییر مدل‌ها فقط از گفت‌وگوی خصوصی با ربات انجام می‌شود.")
+        await message.reply_text("برای امنیت، دیدن وضعیت و تغییر API فقط از گفت‌وگوی خصوصی با ربات انجام می‌شود.")
         return
-    if not user or user.id != MODEL_OWNER_TELEGRAM_ID:
+    if not user or user.id != API_OWNER_TELEGRAM_ID:
         await message.reply_text("این فرمان فقط برای مالک ربات فعال است.")
         return
 
     active_provider = context.application.bot_data.get("provider", "نامشخص")
-    active_model = context.application.bot_data.get("model", "نامشخص")
     lines = [
-        f"مدل فعال: {active_provider}/{active_model}",
-        "برای تغییر: /setmodel <coarena|radoxai> <model_id>",
-        "فهرست مدل‌های قابل‌استفاده:",
+        f"API فعال: {active_provider}",
+        "برای سوییچ: /setapi coarena یا /setapi radoxai",
+        "وضعیت APIها:",
     ]
     for provider in ("coarena", "radoxai"):
-        if not provider_config(provider)["api_key"]:
-            lines.append(f"\n{provider}: کلید API تنظیم نشده است.")
-            continue
-        try:
-            model_ids = await fetch_provider_models(provider)
-            if not model_ids:
-                lines.append(f"\n{provider}: فهرست مدل خالی بود.")
-            else:
-                lines.append(f"\n{provider} ({len(model_ids)} مدل):")
-                lines.extend(f"- {model_id}" for model_id in model_ids)
-        except httpx.HTTPStatusError as exc:
-            log.warning("Could not list %s models (HTTP %s)", provider, exc.response.status_code)
-            lines.append(f"\n{provider}: API فهرست مدل‌ها را با خطای HTTP {exc.response.status_code} رد کرد.")
-        except (httpx.HTTPError, ValueError, RuntimeError) as exc:
-            log.warning("Could not list %s models (%s)", provider, exc.__class__.__name__)
-            lines.append(f"\n{provider}: دریافت فهرست مدل‌ها فعلاً ممکن نشد.")
-
-    # Telegram limits a message to 4096 characters; split on line boundaries.
-    chunks: list[str] = []
-    chunk = ""
-    for line in lines:
-        if len(chunk) + len(line) + 1 > 3800 and chunk:
-            chunks.append(chunk.rstrip())
-            chunk = ""
-        chunk += line + "\n"
-    if chunk.strip():
-        chunks.append(chunk.rstrip())
-    for part in chunks:
-        await message.reply_text(part)
+        model = COARENA_MODEL if provider == "coarena" else RADOXAI_MODEL
+        status = "آمادهٔ انتخاب" if provider_config(provider)["api_key"] else "کلید API تنظیم نشده"
+        lines.append(f"- {provider}: {status}؛ مدل پیکربندی‌شده: {model}")
+    await message.reply_text("\n".join(lines))
 
 
-async def setmodel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def setapi_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
     if not message or not chat:
         return
     if chat.type != ChatType.PRIVATE:
-        await message.reply_text("تغییر مدل فقط از گفت‌وگوی خصوصی با ربات مجاز است.")
+        await message.reply_text("تغییر API فقط از گفت‌وگوی خصوصی با ربات مجاز است.")
         return
-    if not user or user.id != MODEL_OWNER_TELEGRAM_ID:
+    if not user or user.id != API_OWNER_TELEGRAM_ID:
         await message.reply_text("این فرمان فقط برای مالک ربات فعال است.")
         return
-    if len(context.args) != 2:
+    if len(context.args) != 1:
         await message.reply_text(
-            "روش استفاده:\n/setmodel coarena <model_id>\n/setmodel radoxai <model_id>\n\n"
-            "برای دیدن مدل‌های موجود، /models را بزن."
+            "روش استفاده:\n/setapi coarena\n/setapi radoxai\n\n"
+            "برای دیدن APIهای تنظیم‌شده، /apis را بزن."
         )
         return
 
-    provider, model = context.args[0].strip().lower(), context.args[1].strip()
+    provider = context.args[0].strip().lower()
     if provider not in {"coarena", "radoxai"}:
         await message.reply_text("provider باید coarena یا radoxai باشد.")
         return
     if not provider_config(provider)["api_key"]:
-        await message.reply_text(f"کلید {provider} هنوز در تنظیمات سرور قرار نگرفته است.")
-        return
-
-    try:
-        model_ids = await fetch_provider_models(provider)
-    except httpx.HTTPStatusError as exc:
-        log.warning("Could not validate %s model selection (HTTP %s)", provider, exc.response.status_code)
-        await message.reply_text(f"نتوانستم مدل‌های {provider} را از API بخوانم (HTTP {exc.response.status_code}).")
-        return
-    except (httpx.HTTPError, ValueError) as exc:
-        log.warning("Could not validate %s model selection (%s)", provider, exc.__class__.__name__)
-        await message.reply_text(f"فعلاً به API {provider} وصل نمی‌شوم؛ مدل تغییر نکرد.")
-        return
-
-    if model not in model_ids:
-        await message.reply_text(f"مدل `{model}` در فهرست {provider} پیدا نشد. با /models شناسهٔ دقیق را ببین.")
+        await message.reply_text(f"کلید API برای {provider} تنظیم نشده است؛ API تغییر نکرد.")
         return
 
     store: StateStore | None = context.application.bot_data.get("state_store")
     if not store:
-        await message.reply_text("ذخیره‌سازی هنوز آماده نیست؛ مدل تغییر نکرد.")
+        await message.reply_text("ذخیره‌سازی هنوز آماده نیست؛ API تغییر نکرد.")
         return
     try:
-        store.set_setting("active_llm", json.dumps({"provider": provider, "model": model}))
+        store.set_setting("active_provider", provider)
     except Exception:
-        log.exception("Could not persist active model selection")
-        await message.reply_text("نتوانستم انتخاب مدل را روی Volume ذخیره کنم؛ مدل تغییر نکرد.")
+        log.exception("Could not persist active API provider")
+        await message.reply_text("نتوانستم انتخاب API را روی Volume ذخیره کنم؛ API تغییر نکرد.")
         return
 
     context.application.bot_data["provider"] = provider
-    context.application.bot_data["model"] = model
-    await message.reply_text(f"مدل ربات با موفقیت به {provider}/{model} تغییر کرد و پس از راه‌اندازی مجدد هم حفظ می‌شود.")
+    context.application.bot_data["model"] = COARENA_MODEL if provider == "coarena" else RADOXAI_MODEL
+    await message.reply_text(f"API فعال با موفقیت به {provider} تغییر کرد و پس از راه‌اندازی مجدد هم حفظ می‌شود.")
 
 
 async def rememberme_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1502,32 +1438,17 @@ async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.reply_text("فعلاً نتوانستم موضوع بحث را بسازم؛ بعداً دوباره امتحان کن.")
 
 
-def initial_model_selection(store: StateStore) -> tuple[str, str]:
-    defaults = {
-        "coarena": COARENA_MODEL,
-        "radoxai": RADOXAI_MODEL,
-    }
+def initial_api_selection(store: StateStore) -> str:
     preferred = LLM_DEFAULT_PROVIDER
     if not provider_config(preferred)["api_key"]:
         preferred = "radoxai" if preferred == "coarena" else "coarena"
-    provider = preferred
-    model = defaults[provider]
-
-    saved = store.get_setting("active_llm")
-    if saved:
-        try:
-            selection = json.loads(saved)
-            saved_provider = str(selection.get("provider", ""))
-            saved_model = str(selection.get("model", "")).strip()
-            if (
-                saved_provider in {"coarena", "radoxai"}
-                and saved_model
-                and provider_config(saved_provider)["api_key"]
-            ):
-                provider, model = saved_provider, saved_model
-        except (json.JSONDecodeError, AttributeError, TypeError):
-            log.warning("Ignoring malformed stored AI model selection")
-    return provider, model
+    saved_provider = (store.get_setting("active_provider") or "").strip().lower()
+    if (
+        saved_provider in {"coarena", "radoxai"}
+        and provider_config(saved_provider)["api_key"]
+    ):
+        return saved_provider
+    return preferred
 
 
 async def start_idle_monitor(application: Application) -> None:
@@ -1666,15 +1587,16 @@ async def post_init(application: Application) -> None:
     me = await application.bot.get_me()
     application.bot_data["bot_id"] = me.id
     application.bot_data["bot_username"] = me.username or ""
-    provider, model = initial_model_selection(store)
+    provider = initial_api_selection(store)
+    model = COARENA_MODEL if provider == "coarena" else RADOXAI_MODEL
     application.bot_data["provider"] = provider
     application.bot_data["model"] = model
     try:
         await application.bot.set_my_commands([
             BotCommand("start", "معرفی ربات"),
             BotCommand("status", "وضعیت و قابلیت‌های ربات"),
-            BotCommand("models", "فهرست مدل‌ها؛ فقط مالک در پیوی"),
-            BotCommand("setmodel", "تغییر مدل؛ فقط مالک در پیوی"),
+            BotCommand("apis", "وضعیت APIها؛ فقط مالک در پیوی"),
+            BotCommand("setapi", "سوییچ API؛ فقط مالک در پیوی"),
             BotCommand("poll", "ساخت نظرسنجی گیمی"),
             BotCommand("quiz", "ساخت کوییز گیمی"),
             BotCommand("weekly", "شروع بحث هفتگی"),
@@ -1720,8 +1642,8 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start_command), group=0)
     application.add_handler(CommandHandler("id", id_command), group=0)
     application.add_handler(CommandHandler("status", status_command), group=0)
-    application.add_handler(CommandHandler("models", models_command), group=0)
-    application.add_handler(CommandHandler("setmodel", setmodel_command), group=0)
+    application.add_handler(CommandHandler("apis", apis_command), group=0)
+    application.add_handler(CommandHandler("setapi", setapi_command), group=0)
     application.add_handler(CommandHandler("poll", poll_command), group=0)
     application.add_handler(CommandHandler("quiz", quiz_command), group=0)
     application.add_handler(CommandHandler("weekly", weekly_command), group=0)
