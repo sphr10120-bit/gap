@@ -43,12 +43,14 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 COARENA_API_KEY = os.getenv("COARENA_API_KEY", "").strip()
 COARENA_BASE_URL = os.getenv("COARENA_BASE_URL", "https://coarena.ai/api/v1").rstrip("/")
 COARENA_MODEL = os.getenv("COARENA_MODEL", "deepseek-v4-1-flash-1017").strip()
-APMIX_API_KEY = os.getenv("APMIX_API_KEY", "").strip()
-APMIX_BASE_URL = os.getenv("APMIX_BASE_URL", "https://api.apmix.ai/v1").rstrip("/")
-APMIX_MODEL = os.getenv("APMIX_MODEL", "gpt-6-astra").strip()
+GONKAROUTER_API_KEY = os.getenv("GONKAROUTER_API_KEY", "").strip()
+GONKAROUTER_BASE_URL = os.getenv(
+    "GONKAROUTER_BASE_URL", "https://api.gonkarouter.io/v1"
+).rstrip("/")
+GONKAROUTER_MODEL = os.getenv("GONKAROUTER_MODEL", "MiniMaxAI/MiniMax-M2.7").strip()
 LLM_DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "coarena").strip().lower()
-if LLM_DEFAULT_PROVIDER == "xingchi":
-    LLM_DEFAULT_PROVIDER = "apmix"
+if LLM_DEFAULT_PROVIDER in {"xingchi", "apmix"}:
+    LLM_DEFAULT_PROVIDER = "gonkarouter"
 BOT_TONE = os.getenv("BOT_TONE", "friendly").strip().lower()
 BOT_DB_PATH = os.getenv("BOT_DB_PATH", "").strip()
 if not BOT_DB_PATH:
@@ -101,10 +103,10 @@ if API_OWNER_TELEGRAM_ID <= 0:
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("Missing required environment variable: TELEGRAM_BOT_TOKEN")
-if not COARENA_API_KEY and not APMIX_API_KEY:
-    raise RuntimeError("Configure at least one provider API key: COARENA_API_KEY or APMIX_API_KEY")
-if LLM_DEFAULT_PROVIDER not in {"coarena", "apmix"}:
-    raise RuntimeError("LLM_PROVIDER must be either 'coarena' or 'apmix'.")
+if not COARENA_API_KEY and not GONKAROUTER_API_KEY:
+    raise RuntimeError("Configure at least one provider API key: COARENA_API_KEY or GONKAROUTER_API_KEY")
+if LLM_DEFAULT_PROVIDER not in {"coarena", "gonkarouter"}:
+    raise RuntimeError("LLM_PROVIDER must be either 'coarena' or 'gonkarouter'.")
 if BOT_TONE not in {"friendly", "serious"}:
     raise RuntimeError("BOT_TONE must be either 'friendly' or 'serious'.")
 if not BOT_DB_PATH:
@@ -392,8 +394,8 @@ def build_direct_reply_prompt(
 def provider_config(provider: str) -> dict[str, str]:
     if provider == "coarena":
         return {"api_key": COARENA_API_KEY, "base_url": COARENA_BASE_URL}
-    if provider == "apmix":
-        return {"api_key": APMIX_API_KEY, "base_url": APMIX_BASE_URL}
+    if provider == "gonkarouter":
+        return {"api_key": GONKAROUTER_API_KEY, "base_url": GONKAROUTER_BASE_URL}
     raise ValueError("Unknown model provider")
 
 
@@ -447,6 +449,9 @@ async def provider_chat(
                     await asyncio.sleep(delay)
                     continue
                 response.raise_for_status()
+                fallback = response.headers.get("X-Gonka-Fallback", "")
+                if fallback:
+                    log.warning("GonkaRouter served a fallback model: %s", fallback[:160])
                 payload = response.json()
                 break
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
@@ -823,9 +828,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "برای ثبت سلیقهٔ گیمی خودت /rememberme و برای پاک‌کردن حافظهٔ خودت /forgetme را بزن."
         )
         if user and user.id == API_OWNER_TELEGRAM_ID:
-            text += "\n\nمدیریت API: /apis برای دیدن وضعیت، /apmixmodels برای بررسی مدل‌های قابل‌دسترسی APmix، "
-            text += "و /apmixtest برای آزمودن یک درخواست کوتاه (ممکن است سهمیه مصرف کند). "
-            text += "/setapi coarena یا /setapi apmix برای سوییچ API."
+            text += "\n\nمدیریت API: /apis برای دیدن وضعیت، /gonkamodels برای بررسی مدل‌های GonkaRouter، "
+            text += "و /gonkatest برای آزمودن یک درخواست کوتاه (ممکن است از اعتبار استفاده کند). "
+            text += "/setapi coarena یا /setapi gonkarouter برای سوییچ API."
         await update.effective_message.reply_text(text)
 
 
@@ -869,17 +874,17 @@ async def apis_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     active_provider = context.application.bot_data.get("provider", "نامشخص")
     lines = [
         f"API فعال: {active_provider}",
-        "برای سوییچ: /setapi coarena یا /setapi apmix",
+        "برای سوییچ: /setapi coarena یا /setapi gonkarouter",
         "وضعیت APIها:",
     ]
-    for provider in ("coarena", "apmix"):
-        model = COARENA_MODEL if provider == "coarena" else APMIX_MODEL
+    for provider in ("coarena", "gonkarouter"):
+        model = COARENA_MODEL if provider == "coarena" else GONKAROUTER_MODEL
         status = "آمادهٔ انتخاب" if provider_config(provider)["api_key"] else "کلید API تنظیم نشده"
         lines.append(f"- {provider}: {status}؛ مدل پیکربندی‌شده: {model}")
     await message.reply_text("\n".join(lines))
 
 
-async def apmix_models_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def gonkarouter_models_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
@@ -888,9 +893,9 @@ async def apmix_models_command(update: Update, context: ContextTypes.DEFAULT_TYP
     if chat.type != ChatType.PRIVATE or not user or user.id != API_OWNER_TELEGRAM_ID:
         await message.reply_text("برای امنیت، این بررسی فقط در پیوی و برای مالک ربات فعال است.")
         return
-    config = provider_config("apmix")
+    config = provider_config("gonkarouter")
     if not config["api_key"]:
-        await message.reply_text("APMIX_API_KEY در Railway تنظیم نشده است.")
+        await message.reply_text("GONKAROUTER_API_KEY در Railway تنظیم نشده است.")
         return
 
     try:
@@ -902,15 +907,15 @@ async def apmix_models_command(update: Update, context: ContextTypes.DEFAULT_TYP
             response.raise_for_status()
             payload = response.json()
     except httpx.HTTPStatusError as exc:
-        log.error("APmix model-list request returned HTTP %s", exc.response.status_code)
+        log.error("GonkaRouter model-list request returned HTTP %s", exc.response.status_code)
         await message.reply_text(
-            f"APmix فهرست مدل‌ها را با خطای HTTP {exc.response.status_code} رد کرد. "
-            "کلید یا وضعیت پلن را در داشبورد APmix بررسی کن."
+            f"GonkaRouter فهرست مدل‌ها را با خطای HTTP {exc.response.status_code} رد کرد. "
+            "کلید را بررسی کن؛ فهرست فعلی مدل‌ها را هم در gonkarouter.io/models ببین."
         )
         return
     except httpx.HTTPError as exc:
-        log.warning("APmix model-list request failed: %s", exc.__class__.__name__)
-        await message.reply_text("به endpoint فهرست مدل‌های APmix وصل نشدم؛ کمی بعد دوباره امتحان کن.")
+        log.warning("GonkaRouter model-list request failed: %s", exc.__class__.__name__)
+        await message.reply_text("به endpoint فهرست مدل‌های GonkaRouter وصل نشدم؛ کمی بعد دوباره امتحان کن.")
         return
     except (ValueError, TypeError):
         await message.reply_text("پاسخ فهرست مدل‌های APmix قابل‌خواندن نبود.")
@@ -929,17 +934,17 @@ async def apmix_models_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await message.reply_text("کلید پاسخ داد، اما فهرست مدل خالی بود یا قالب آن شناخته‌شده نبود.")
         return
 
-    target_available = any(model_id.casefold() == APMIX_MODEL.casefold() for model_id in model_ids)
-    relevant_models = [model_id for model_id in model_ids if "gpt-6" in model_id.casefold()]
+    target_available = any(model_id.casefold() == GONKAROUTER_MODEL.casefold() for model_id in model_ids)
+    relevant_models = model_ids
     result = "در فهرست قابل‌دسترسی این کلید هست." if target_available else "در فهرست قابل‌دسترسی این کلید دیده نشد."
-    details = ", ".join(relevant_models[:10]) if relevant_models else ", ".join(model_ids[:10])
+    details = ", ".join(relevant_models[:20])
     await message.reply_text(
-        f"بررسی کلید APmix کامل شد.\nمدل `{APMIX_MODEL}`: {result}\n"
+        f"بررسی کلید GonkaRouter کامل شد.\nمدل `{GONKAROUTER_MODEL}`: {result}\n"
         f"مدل‌های مرتبط: {details}"
     )
 
 
-async def apmix_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def gonkarouter_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
@@ -948,16 +953,16 @@ async def apmix_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if chat.type != ChatType.PRIVATE or not user or user.id != API_OWNER_TELEGRAM_ID:
         await message.reply_text("این آزمون فقط در پیوی و برای مالک ربات فعال است.")
         return
-    if not APMIX_API_KEY:
-        await message.reply_text("APMIX_API_KEY در Railway تنظیم نشده است.")
+    if not GONKAROUTER_API_KEY:
+        await message.reply_text("GONKAROUTER_API_KEY در Railway تنظیم نشده است.")
         return
-    model = APMIX_MODEL
+    model = GONKAROUTER_MODEL
     try:
         answer = await provider_chat(
-            "apmix",
+            "gonkarouter",
             model,
             [{"role": "user", "content": "Reply with exactly OK."}],
-            max_tokens=8,
+            max_tokens=1024,
         )
     except httpx.HTTPStatusError as exc:
         try:
@@ -972,26 +977,30 @@ async def apmix_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         if not detail and isinstance(payload, dict):
             detail = payload.get("message", "") or payload.get("code", "")
-        detail = str(detail).replace(APMIX_API_KEY, "[REDACTED]").strip()[:500]
-        request_id = exc.response.headers.get("x-apmix-request-id", "")[:100]
-        log.error("APmix owner test returned HTTP %s for model %s", exc.response.status_code, model)
+        detail = str(detail).replace(GONKAROUTER_API_KEY, "[REDACTED]").strip()[:500]
+        request_id = (
+            exc.response.headers.get("x-request-id", "")
+            or exc.response.headers.get("X-Request-Id", "")
+            or exc.response.headers.get("x-gonka-request-id", "")
+        )[:100]
+        log.error("GonkaRouter owner test returned HTTP %s for model %s", exc.response.status_code, model)
         await message.reply_text(
-            f"آزمون APmix با HTTP {exc.response.status_code} شکست خورد.\n"
+            f"آزمون GonkaRouter با HTTP {exc.response.status_code} شکست خورد.\n"
             f"جزئیات سرویس: {detail or 'در پاسخ API توضیحی نبود.'}"
             + (f"\nشناسهٔ درخواست: {request_id}" if request_id else "")
         )
         return
     except httpx.HTTPError as exc:
-        log.warning("APmix owner test failed: %s", exc.__class__.__name__)
-        await message.reply_text("آزمون APmix به‌دلیل خطای اتصال انجام نشد؛ کمی بعد دوباره امتحان کن.")
+        log.warning("GonkaRouter owner test failed: %s", exc.__class__.__name__)
+        await message.reply_text("آزمون GonkaRouter به‌دلیل خطای اتصال انجام نشد؛ کمی بعد دوباره امتحان کن.")
         return
     except Exception:
-        log.exception("APmix owner test failed unexpectedly")
-        await message.reply_text("آزمون APmix به خطای داخلی خورد؛ جزئیات فنی در Railway Logs ثبت شد.")
+        log.exception("GonkaRouter owner test failed unexpectedly")
+        await message.reply_text("آزمون GonkaRouter به خطای داخلی خورد؛ جزئیات فنی در Railway Logs ثبت شد.")
         return
 
     await message.reply_text(
-        f"درخواست تولید پاسخ در APmix موفق بود. مدل: {model}. پاسخ آزمایشی: {answer or '(خالی)'}"
+        f"درخواست تولید پاسخ در GonkaRouter موفق بود. مدل: {model}. پاسخ آزمایشی: {answer or '(خالی)'}"
     )
 
 
@@ -1009,14 +1018,14 @@ async def setapi_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     if len(context.args) != 1:
         await message.reply_text(
-            "روش استفاده:\n/setapi coarena\n/setapi apmix\n\n"
+            "روش استفاده:\n/setapi coarena\n/setapi gonkarouter\n\n"
             "برای دیدن APIهای تنظیم‌شده، /apis را بزن."
         )
         return
 
     provider = context.args[0].strip().lower()
-    if provider not in {"coarena", "apmix"}:
-        await message.reply_text("provider باید coarena یا apmix باشد.")
+    if provider not in {"coarena", "gonkarouter"}:
+        await message.reply_text("provider باید coarena یا gonkarouter باشد.")
         return
     if not provider_config(provider)["api_key"]:
         await message.reply_text(f"کلید API برای {provider} تنظیم نشده است؛ API تغییر نکرد.")
@@ -1034,7 +1043,7 @@ async def setapi_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     context.application.bot_data["provider"] = provider
-    context.application.bot_data["model"] = COARENA_MODEL if provider == "coarena" else APMIX_MODEL
+    context.application.bot_data["model"] = COARENA_MODEL if provider == "coarena" else GONKAROUTER_MODEL
     await message.reply_text(f"API فعال با موفقیت به {provider} تغییر کرد و پس از راه‌اندازی مجدد هم حفظ می‌شود.")
 
 
@@ -1333,10 +1342,10 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                     f"پیامت و پیامِ ریپلای‌شده را دریافت کردم، اما سرویس {provider} درخواست مدل را با خطای 402 رد کرد. "
                     "فعلاً نمی‌توانم پاسخ هوش‌مصنوعی بسازم؛ اعتبار یا دسترسی مدل API باید بررسی شود."
                 )
-            elif exc.response.status_code == 403 and provider == "apmix":
+            elif exc.response.status_code == 403 and provider == "gonkarouter":
                 notice = (
-                    f"APmix دسترسی مدل {model} را با خطای 403 رد کرد. مالک می‌تواند در پیوی /apmixtest را اجرا کند؛ "
-                    "ممکن است مدل در پلن این کلید نباشد یا وضعیت حساب نیاز به بررسی داشته باشد."
+                    f"GonkaRouter دسترسی مدل {model} را با خطای 403 رد کرد. مالک می‌تواند در پیوی /gonkatest را اجرا کند؛ "
+                    "کلید یا دسترسی مدل را در GonkaRouter بررسی کن."
                 )
             else:
                 notice = (
@@ -1741,17 +1750,17 @@ async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 def initial_api_selection(store: StateStore) -> str:
     preferred = LLM_DEFAULT_PROVIDER
     if not provider_config(preferred)["api_key"]:
-        preferred = "apmix" if preferred == "coarena" else "coarena"
+        preferred = "gonkarouter" if preferred == "coarena" else "coarena"
     saved_provider = (store.get_setting("active_provider") or "").strip().lower()
-    if saved_provider == "xingchi":
-        saved_provider = "apmix"
-        if APMIX_API_KEY:
+    if saved_provider in {"xingchi", "apmix"}:
+        saved_provider = "gonkarouter"
+        if GONKAROUTER_API_KEY:
             try:
-                store.set_setting("active_provider", "apmix")
+                store.set_setting("active_provider", "gonkarouter")
             except Exception:
-                log.exception("Could not migrate saved XingChi selection to APmix")
+                log.exception("Could not migrate saved provider selection to GonkaRouter")
     if (
-        saved_provider in {"coarena", "apmix"}
+        saved_provider in {"coarena", "gonkarouter"}
         and provider_config(saved_provider)["api_key"]
     ):
         return saved_provider
@@ -1895,7 +1904,7 @@ async def post_init(application: Application) -> None:
     application.bot_data["bot_id"] = me.id
     application.bot_data["bot_username"] = me.username or ""
     provider = initial_api_selection(store)
-    model = COARENA_MODEL if provider == "coarena" else APMIX_MODEL
+    model = COARENA_MODEL if provider == "coarena" else GONKAROUTER_MODEL
     application.bot_data["provider"] = provider
     application.bot_data["model"] = model
     try:
@@ -1903,8 +1912,8 @@ async def post_init(application: Application) -> None:
             BotCommand("start", "معرفی ربات"),
             BotCommand("status", "وضعیت و قابلیت‌های ربات"),
             BotCommand("apis", "وضعیت APIها؛ فقط مالک در پیوی"),
-            BotCommand("apmixmodels", "بررسی مدل‌های قابل‌دسترسی APmix؛ فقط مالک در پیوی"),
-            BotCommand("apmixtest", "آزمون کوتاه APmix؛ ممکن است سهمیه مصرف کند"),
+            BotCommand("gonkamodels", "بررسی مدل‌های GonkaRouter؛ فقط مالک در پیوی"),
+            BotCommand("gonkatest", "آزمون کوتاه GonkaRouter؛ ممکن است اعتبار مصرف کند"),
             BotCommand("setapi", "سوییچ API؛ فقط مالک در پیوی"),
             BotCommand("poll", "ساخت نظرسنجی گیمی"),
             BotCommand("quiz", "ساخت کوییز گیمی"),
@@ -1952,8 +1961,8 @@ def main() -> None:
     application.add_handler(CommandHandler("id", id_command), group=0)
     application.add_handler(CommandHandler("status", status_command), group=0)
     application.add_handler(CommandHandler("apis", apis_command), group=0)
-    application.add_handler(CommandHandler("apmixmodels", apmix_models_command), group=0)
-    application.add_handler(CommandHandler("apmixtest", apmix_test_command), group=0)
+    application.add_handler(CommandHandler("gonkamodels", gonkarouter_models_command), group=0)
+    application.add_handler(CommandHandler("gonkatest", gonkarouter_test_command), group=0)
     application.add_handler(CommandHandler("setapi", setapi_command), group=0)
     application.add_handler(CommandHandler("poll", poll_command), group=0)
     application.add_handler(CommandHandler("quiz", quiz_command), group=0)
