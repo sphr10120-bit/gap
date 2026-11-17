@@ -888,7 +888,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         text = (
             "سلام! در گروه تنظیم‌شده دربارهٔ سینما، فیلم و سریال و بازی‌های PC و کنسولی گفت‌وگو می‌کنم؛ "
             "به منشن‌ها و ریپلای‌ها جواب می‌دهم و گاهی بحث شروع می‌کنم. "
-            "برای اجرای نظرسنجی یا quiz از /poll و /quiz استفاده کن. "
+            "مدیران گروه برای اجرای نظرسنجی یا quiz دستی از /poll و /quiz استفاده کنند. "
             "برای ثبت علاقه‌مندی به فیلم یا بازی /rememberme و برای پاک‌کردنش /forgetme را بزن."
         )
         if user and user.id == API_OWNER_TELEGRAM_ID:
@@ -1678,10 +1678,33 @@ async def send_interaction_poll(
             log.exception("Could not persist sent quiz question for chat %s", chat_id)
 
 
+async def can_create_interaction(chat: Any, user: Any, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Allow group admins, the configured bot owner, and the configured creator."""
+    if not chat or not user:
+        return False
+    privileged_ids = {API_OWNER_TELEGRAM_ID}
+    if CREATOR_TELEGRAM_ID is not None:
+        privileged_ids.add(CREATOR_TELEGRAM_ID)
+    if user.id in privileged_ids:
+        return True
+    try:
+        member = await context.bot.get_chat_member(chat_id=chat.id, user_id=user.id)
+    except Exception as exc:
+        log.warning("Could not verify group role for poll/quiz command: %s", exc.__class__.__name__)
+        return False
+    return member.status in {"administrator", "creator"}
+
+
 async def interaction_command(update: Update, context: ContextTypes.DEFAULT_TYPE, kind: str) -> None:
     chat = update.effective_chat
     message = update.effective_message
     if not message or not matches_target_chat(chat):
+        return
+    if not await can_create_interaction(chat, message.from_user, context):
+        await message.reply_text(
+            "ساخت دستی نظرسنجی یا کوییز فقط برای مدیران گروه و سازندهٔ ربات مجاز است. "
+            "نظرسنجی‌ها و کوییزهای زمان‌بندی‌شدهٔ خود ربات همچنان طبق برنامه ارسال می‌شوند."
+        )
         return
     store: StateStore | None = context.application.bot_data.get("state_store")
     if not store:
@@ -2019,8 +2042,8 @@ async def post_init(application: Application) -> None:
             BotCommand("gonkamodels", "بررسی مدل‌های GonkaRouter؛ فقط مالک در پیوی"),
             BotCommand("gonkatest", "آزمون کوتاه GonkaRouter؛ ممکن است اعتبار مصرف کند"),
             BotCommand("setapi", "سوییچ API؛ فقط مالک در پیوی"),
-            BotCommand("poll", "نظرسنجی دربارهٔ فیلم و بازی"),
-            BotCommand("quiz", "کوییز دربارهٔ سینما و بازی"),
+            BotCommand("poll", "نظرسنجی دستی؛ فقط مدیر گروه"),
+            BotCommand("quiz", "کوییز دستی؛ فقط مدیر گروه"),
             BotCommand("weekly", "شروع بحث هفتگی"),
             BotCommand("rememberme", "ذخیرهٔ علاقه‌مندی فیلم یا بازی"),
             BotCommand("forgetme", "پاک‌کردن حافظهٔ خودت"),
