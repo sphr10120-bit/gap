@@ -220,6 +220,18 @@ def is_supported_topic_message(text: str) -> bool:
     return any(term.casefold() in folded for term in SUPPORTED_TOPIC_TERMS)
 
 
+def is_forwarded_message(message: Any) -> bool:
+    """Recognize current Bot API forward_origin and legacy forward fields."""
+    if getattr(message, "is_automatic_forward", False):
+        return True
+    if getattr(message, "forward_origin", None) is not None:
+        return True
+    return any(
+        getattr(message, field, None) is not None
+        for field in ("forward_from", "forward_from_chat", "forward_sender_name")
+    )
+
+
 # Retain the old helper name for callers importing it from earlier bot versions.
 is_console_game_message = is_supported_topic_message
 
@@ -1190,10 +1202,9 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception:
             log.exception("Could not persist chat activity")
 
-    # Posts auto-forwarded from a linked channel into its discussion group are
-    # group activity, but not conversational prompts for the bot to answer.
-    if getattr(message, "is_automatic_forward", False):
-        log.debug("Ignoring automatic channel forward in chat %s", chat.id)
+    # Forwarded content is group activity, but not a conversational prompt.
+    if is_forwarded_message(message):
+        log.debug("Ignoring forwarded message in chat %s", chat.id)
         return
 
     text = (message.text or message.caption or "").strip()
