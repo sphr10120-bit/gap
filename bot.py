@@ -1190,6 +1190,12 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception:
             log.exception("Could not persist chat activity")
 
+    # Posts auto-forwarded from a linked channel into its discussion group are
+    # group activity, but not conversational prompts for the bot to answer.
+    if getattr(message, "is_automatic_forward", False):
+        log.debug("Ignoring automatic channel forward in chat %s", chat.id)
+        return
+
     text = (message.text or message.caption or "").strip()
     if not text:
         return
