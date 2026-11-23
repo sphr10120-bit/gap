@@ -1941,7 +1941,14 @@ async def generate_discussion_topic(application: Application, chat_id: int, *, w
             application.bot_data["recent_topics"][chat_id] = recent[-12:]
         return True
     except Exception as exc:
-        log.warning("Could not start %s discussion: %s", "weekly" if weekly else "idle", exc.__class__.__name__)
+        detail = " ".join(str(exc).split())[:400] or exc.__class__.__name__
+        log.warning(
+            "Could not start %s discussion in chat %s (%s): %s",
+            "weekly" if weekly else "idle",
+            chat_id,
+            exc.__class__.__name__,
+            detail,
+        )
         return False
 
 
