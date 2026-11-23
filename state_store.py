@@ -51,7 +51,11 @@ class ConversationMemory:
             "text": cleaned,
             "created_at": timestamp,
         })
-        self._messages[chat_id] = messages[-self.max_messages:]
+        user_messages = [item for item in messages if item.get("user_id") == user_id]
+        if len(user_messages) > self.max_messages:
+            expired_ids = {item["message_id"] for item in user_messages[:-self.max_messages]}
+            messages = [item for item in messages if item["message_id"] not in expired_ids]
+        self._messages[chat_id] = messages
 
     def delete_user(self, chat_id: int, user_id: int) -> None:
         retained = [
@@ -70,6 +74,7 @@ class ConversationMemory:
         now: float | None = None,
         exclude_message_id: int | None = None,
         limit: int | None = None,
+        user_id: int | None = None,
     ) -> list[dict[str, Any]]:
         timestamp = time.time() if now is None else now
         self.purge_expired(now=timestamp, chat_id=chat_id)
@@ -77,6 +82,7 @@ class ConversationMemory:
         messages = [
             item for item in self._messages.get(chat_id, [])
             if exclude_message_id is None or item["message_id"] != exclude_message_id
+            if user_id is None or item.get("user_id") == user_id
         ]
         return [dict(item) for item in messages[-count:]]
 
@@ -340,12 +346,13 @@ class StateStore:
             self.connection.execute(
                 """
                 DELETE FROM conversation_messages
-                WHERE chat_id = ? AND message_id NOT IN (
+                WHERE chat_id = ? AND user_id IS ? AND message_id NOT IN (
                     SELECT message_id FROM conversation_messages
-                    WHERE chat_id = ? ORDER BY created_at DESC, message_id DESC LIMIT ?
+                    WHERE chat_id = ? AND user_id IS ?
+                    ORDER BY created_at DESC, message_id DESC LIMIT ?
                 )
                 """,
-                (chat_id, chat_id, keep),
+                (chat_id, user_id, chat_id, user_id, keep),
             )
 
     def recent_conversation_messages(
@@ -356,6 +363,7 @@ class StateStore:
         ttl_seconds: int = 30 * 24 * 60 * 60,
         exclude_message_id: int | None = None,
         limit: int = 12,
+        user_id: int | None = None,
     ) -> list[dict[str, Any]]:
         cutoff = now - max(60, int(ttl_seconds))
         with self.connection:
@@ -369,9 +377,18 @@ class StateStore:
             FROM conversation_messages
             WHERE chat_id = ? AND created_at >= ?
               AND (? IS NULL OR message_id != ?)
+              AND (? IS NULL OR user_id = ?)
             ORDER BY created_at DESC, message_id DESC LIMIT ?
             """,
-            (chat_id, cutoff, exclude_message_id, exclude_message_id, max(1, min(limit, 12))),
+            (
+                chat_id,
+                cutoff,
+                exclude_message_id,
+                exclude_message_id,
+                user_id,
+                user_id,
+                max(1, min(limit, 12)),
+            ),
         ).fetchall()
         return [dict(row) for row in reversed(rows)]
 

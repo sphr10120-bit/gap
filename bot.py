@@ -368,6 +368,7 @@ def format_recent_conversation(
     chat_id: int,
     current_message_id: int,
     persisted_rows: list[dict[str, Any]] | None = None,
+    user_id: int | None = None,
 ) -> str:
     if persisted_rows is None:
         rows = memory.recent(
@@ -375,11 +376,13 @@ def format_recent_conversation(
             now=utc_now().timestamp(),
             exclude_message_id=current_message_id,
             limit=CONVERSATION_MAX_MESSAGES,
+            user_id=user_id,
         )
     else:
         rows = [
             dict(row) for row in persisted_rows
             if row.get("message_id") != current_message_id
+            and (user_id is None or row.get("user_id") == user_id)
         ][-CONVERSATION_MAX_MESSAGES:]
     if not rows:
         return ""
@@ -986,7 +989,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "موضوع‌ها: سینما و فیلم/سریال، بازی‌های PC و بازی‌های کنسولی. "
         f"ربات فعاله. شروع بحث: پس از {IDLE_MINUTES} دقیقه سکوت؛ فاصلهٔ حداقلی بین شروع بحث‌ها: {TOPIC_COOLDOWN_MINUTES} دقیقه. "
         f"بحث هفتگی هر {WEEKLY_TOPIC_INTERVAL_DAYS} روز؛ نظرسنجی و quiz هر {WEEKLY_INTERACTION_INTERVAL_DAYS} روز و با فاصلهٔ تقریبی {WEEKLY_INTERACTION_SPACING_HOURS} ساعت. "
-        f"زمینهٔ گفتگو: حداکثر {CONVERSATION_MAX_MESSAGES} پیام اخیر، نگهداری روی Volume تا {CONVERSATION_HISTORY_TTL_DAYS} روز؛ "
+        f"زمینهٔ گفتگو: حداکثر {CONVERSATION_MAX_MESSAGES} پیام اخیر برای هر عضو به‌صورت جداگانه، نگهداری روی Volume تا {CONVERSATION_HISTORY_TTL_DAYS} روز؛ "
         f"ترجیحات صریح هر کاربر تا {USER_MEMORY_TTL_DAYS} روز و قابل‌حذف با /forgetme. "
         f"لحن: {tone_label}. API فعال: {provider}. دستورها: /poll، /quiz، /weekly، /rememberme، /forgetme"
     )
@@ -1346,6 +1349,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     system_prompt = (
         "تو یک دستیار فارسی‌زبان در گروهی دربارهٔ بازی‌های رایانه‌ای و کنسولی، فیلم و سریال هستی. "
+        "هر عضو هویت و سابقهٔ جداگانه دارد؛ ترجیحات و تاریخچهٔ عضو فعلی را به اعضای دیگر نسبت نده. "
         f"{tone_instruction()} {creator_note}"
         "اگر کاربر مستقیماً تو را منشن کرده یا به پیام تو ریپلای کرده، روشن، دقیق و مختصر پاسخ بده؛ "
         "در غیر این صورت فقط اگر پیام واقعاً دربارهٔ سینما، فیلم و سریال یا بازی‌های PC و کنسولی است، پاسخی مرتبط و سنجیده بده. "
@@ -1370,9 +1374,18 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         )
     else:
         user_prompt = f"پیام گروه: {text}"
+    if user:
+        user_prompt = (
+            f"عضو فعلی که باید به او پاسخ بدهی: {author}. این عضو از سایر اعضای گروه جداست؛ "
+            "تاریخچه و ترجیحات همراه فقط متعلق به همین عضو است. اگر پیامِ موردِ ریپلای از عضو دیگری است، "
+            "متن آن را جداگانه به همان گوینده نسبت بده.\n\n"
+            f"{user_prompt}"
+        )
     if direct and memory:
-        persisted_rows = None
-        if store:
+        # Never fall back to a group-wide transcript: only the current member's
+        # rows may be supplied as conversational history.
+        persisted_rows = [] if user is None else None
+        if store and user:
             try:
                 persisted_rows = store.recent_conversation_messages(
                     chat.id,
@@ -1380,6 +1393,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                     ttl_seconds=CONVERSATION_HISTORY_TTL_SECONDS,
                     exclude_message_id=message.message_id,
                     limit=CONVERSATION_MAX_MESSAGES,
+                    user_id=user.id,
                 )
             except Exception:
                 log.exception("Could not load persisted conversation context")
@@ -1388,6 +1402,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             chat.id,
             message.message_id,
             persisted_rows=persisted_rows,
+            user_id=user.id if user else None,
         )
         if history:
             user_prompt = (
